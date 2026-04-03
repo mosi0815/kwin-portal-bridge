@@ -15,8 +15,9 @@ use lamco_portal::{PortalConfig, PortalManager, PortalSessionHandle};
 
 use crate::daemon::{SessionRequest, request};
 use crate::model::{
-    CapturedFrame, FrameInfo, FrameProbeResult, PortalActionResult, PortalSessionInfo,
-    PortalStream, ScreenInfo, ScreenshotCapture, ScreenshotResult, StreamSelection,
+    ButtonStateResult, CapturedFrame, FrameInfo, FrameProbeResult, PortalActionResult,
+    PortalSessionInfo, PortalStream, ScreenInfo, ScreenshotCapture, ScreenshotResult,
+    StreamSelection,
 };
 use crate::token_store::TokenStore;
 
@@ -26,6 +27,7 @@ pub struct LivePortalSession {
     session: PortalSessionHandle,
     restore_token: Option<String>,
     pipewire: Option<PersistentPipeWire>,
+    held_buttons: HashSet<i32>,
 }
 
 struct PersistentPipeWire {
@@ -51,8 +53,30 @@ impl PortalBackend {
         request(SessionRequest::MovePointerAbsolute { stream, x, y }).await
     }
 
+    pub async fn move_pointer_screen_point(
+        &self,
+        screen: &ScreenInfo,
+        x: i32,
+        y: i32,
+    ) -> Result<PortalActionResult> {
+        request(SessionRequest::MovePointerScreenPoint {
+            screen: screen.clone(),
+            x,
+            y,
+        })
+        .await
+    }
+
     pub async fn pointer_button(&self, button: i32, pressed: bool) -> Result<PortalActionResult> {
         request(SessionRequest::PointerButton { button, pressed }).await
+    }
+
+    pub async fn left_mouse_down(&self) -> Result<ButtonStateResult> {
+        request(SessionRequest::LeftMouseDown).await
+    }
+
+    pub async fn left_mouse_up(&self) -> Result<ButtonStateResult> {
+        request(SessionRequest::LeftMouseUp).await
     }
 
     pub async fn click_screen_point(
@@ -269,6 +293,7 @@ impl LivePortalSession {
             session,
             restore_token,
             pipewire: None,
+            held_buttons: HashSet::new(),
         })
     }
 
@@ -277,6 +302,13 @@ impl LivePortalSession {
     }
 
     pub async fn shutdown(mut self) -> Result<()> {
+        for button in self.held_buttons.clone() {
+            self.manager
+                .remote_desktop()
+                .notify_pointer_button(self.session.ashpd_session(), button, false)
+                .await
+                .ok();
+        }
         if let Some(mut pipewire) = self.pipewire.take() {
             pipewire.manager.shutdown().ok();
         }
@@ -313,6 +345,12 @@ impl LivePortalSession {
             .await
             .context("failed to send pointer button event through the portal")?;
 
+        if pressed {
+            self.held_buttons.insert(button);
+        } else {
+            self.held_buttons.remove(&button);
+        }
+
         Ok(PortalActionResult {
             action: if pressed {
                 "mouse-button-press".to_owned()
@@ -321,6 +359,48 @@ impl LivePortalSession {
             },
             session: self.info(),
             target_stream: None,
+        })
+    }
+
+    pub async fn left_mouse_down(&mut self) -> Result<ButtonStateResult> {
+        let button = 272;
+        if self.held_buttons.contains(&button) {
+            bail!("left mouse button is already held");
+        }
+
+        self.manager
+            .remote_desktop()
+            .notify_pointer_button(self.session.ashpd_session(), button, true)
+            .await
+            .context("failed to press left mouse button through the portal")?;
+
+        self.held_buttons.insert(button);
+
+        Ok(ButtonStateResult {
+            action: "left-mouse-down".to_owned(),
+            button: "left".to_owned(),
+            is_held: true,
+            was_held: false,
+        })
+    }
+
+    pub async fn left_mouse_up(&mut self) -> Result<ButtonStateResult> {
+        let button = 272;
+        let was_held = self.held_buttons.remove(&button);
+
+        if was_held {
+            self.manager
+                .remote_desktop()
+                .notify_pointer_button(self.session.ashpd_session(), button, false)
+                .await
+                .context("failed to release left mouse button through the portal")?;
+        }
+
+        Ok(ButtonStateResult {
+            action: "left-mouse-up".to_owned(),
+            button: "left".to_owned(),
+            is_held: false,
+            was_held,
         })
     }
 
@@ -354,6 +434,10 @@ impl LivePortalSession {
         button: i32,
         count: u32,
     ) -> Result<PortalActionResult> {
+        if self.held_buttons.contains(&button) {
+            bail!("button {button} is currently held by the session");
+        }
+
         let info = self.info();
         let target_stream = match_stream_to_screen(&info.streams, screen)?;
         let (local_x, local_y) = local_stream_point(screen, &target_stream, x, y)?;
@@ -384,6 +468,34 @@ impl LivePortalSession {
 
         Ok(PortalActionResult {
             action: "click".to_owned(),
+            session: info,
+            target_stream: Some(target_stream),
+        })
+    }
+
+    pub async fn move_pointer_screen_point(
+        &mut self,
+        screen: &ScreenInfo,
+        x: i32,
+        y: i32,
+    ) -> Result<PortalActionResult> {
+        let info = self.info();
+        let target_stream = match_stream_to_screen(&info.streams, screen)?;
+        let (local_x, local_y) = local_stream_point(screen, &target_stream, x, y)?;
+
+        self.manager
+            .remote_desktop()
+            .notify_pointer_motion_absolute(
+                self.session.ashpd_session(),
+                target_stream.stream.node_id,
+                local_x,
+                local_y,
+            )
+            .await
+            .context("failed to move pointer through the portal")?;
+
+        Ok(PortalActionResult {
+            action: "mouse-move".to_owned(),
             session: info,
             target_stream: Some(target_stream),
         })
@@ -490,6 +602,10 @@ impl LivePortalSession {
         to_x: i32,
         to_y: i32,
     ) -> Result<PortalActionResult> {
+        if self.held_buttons.contains(&272) {
+            bail!("left mouse button is currently held by the session");
+        }
+
         let info = self.info();
         let from_stream = match_stream_to_screen(&info.streams, from_screen)?;
         let to_stream = match_stream_to_screen(&info.streams, to_screen)?;

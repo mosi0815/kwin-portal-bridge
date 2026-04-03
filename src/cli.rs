@@ -17,6 +17,11 @@ pub enum Command {
     SessionStart,
     /// End the long-lived portal session daemon for this tool-use lock.
     SessionEnd,
+    /// Execute multiple actions sequentially against the active portal session.
+    SessionBatch {
+        #[arg(long)]
+        json: String,
+    },
     /// Show which local desktop integration tools are available.
     Doctor,
     /// Enumerate screens through a KWin script.
@@ -118,6 +123,10 @@ pub enum Command {
         #[arg(long)]
         to_y: i32,
     },
+    /// Press and hold the left mouse button until explicitly released.
+    LeftMouseDown,
+    /// Release the left mouse button if it is currently held.
+    LeftMouseUp,
     /// Persistently mark disallowed windows as excludeFromCapture until restored.
     PrepareForAction {
         #[arg(long = "allowed-bundle-id")]

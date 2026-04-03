@@ -6,9 +6,9 @@ use crate::capture::{CaptureBackend, resolve_screen};
 use crate::exclude_state::ExcludeStateStore;
 use crate::kwin::KWinBackend;
 use crate::model::{
-    AppRef, DragActionResult, KeyboardActionResult, PointerActionResult,
-    PrepareActionResult, RaiseWindowAtPointResult, ResolvePrepareCaptureResult, ScreenInfo,
-    ScreenshotResult, WindowInfo,
+    AppRef, DragActionResult, KeyboardActionResult, PointerActionResult, PrepareActionResult,
+    RaiseWindowAtPointResult, ResolvePrepareCaptureResult, ScreenInfo, ScreenshotResult,
+    SessionBatchAction, SessionBatchRequest, SessionBatchResult, WindowInfo,
 };
 use crate::portal::PortalBackend;
 
@@ -138,6 +138,26 @@ impl ExecutorBackend {
             x,
             y,
             raised: raise.raised,
+            blocked_by: None,
+        })
+    }
+
+    pub async fn move_pointer(
+        &self,
+        x: i32,
+        y: i32,
+        portal: &PortalBackend,
+        kwin: &KWinBackend,
+    ) -> Result<PointerActionResult> {
+        let screens = kwin.list_screens()?;
+        let screen = screen_at_point(&screens, x, y)?;
+        portal.move_pointer_screen_point(screen, x, y).await?;
+
+        Ok(PointerActionResult {
+            action: "mouse-move".to_owned(),
+            x,
+            y,
+            raised: None,
             blocked_by: None,
         })
     }
@@ -382,6 +402,115 @@ impl ExecutorBackend {
             Ok(screenshot) => Ok(resolve_capture_success(screenshot, hidden, activated)),
             Err(error) => Ok(resolve_capture_error(screen, hidden, activated, error)),
         }
+    }
+
+    pub async fn session_batch(
+        &self,
+        batch: SessionBatchRequest,
+        capture: &CaptureBackend,
+        portal: &PortalBackend,
+        kwin: &KWinBackend,
+    ) -> Result<SessionBatchResult> {
+        let mut results = Vec::with_capacity(batch.actions.len());
+
+        for action in batch.actions {
+            let value = match action {
+                SessionBatchAction::Wait { duration_ms } => {
+                    tokio::time::sleep(std::time::Duration::from_millis(duration_ms)).await;
+                    serde_json::json!({
+                        "action": "wait",
+                        "durationMs": duration_ms,
+                    })
+                }
+                SessionBatchAction::MouseMove { x, y } => {
+                    serde_json::to_value(self.move_pointer(x, y, portal, kwin).await?)?
+                }
+                SessionBatchAction::Click {
+                    x,
+                    y,
+                    button,
+                    count,
+                    allowed_bundle_ids,
+                    host_bundle_id,
+                } => serde_json::to_value(
+                    self.click(
+                        &allowed_bundle_ids,
+                        &host_bundle_id,
+                        x,
+                        y,
+                        &button,
+                        count,
+                        portal,
+                        kwin,
+                    )
+                    .await?,
+                )?,
+                SessionBatchAction::Scroll {
+                    x,
+                    y,
+                    dx,
+                    dy,
+                    allowed_bundle_ids,
+                    host_bundle_id,
+                } => serde_json::to_value(
+                    self.scroll(
+                        &allowed_bundle_ids,
+                        &host_bundle_id,
+                        x,
+                        y,
+                        dx,
+                        dy,
+                        portal,
+                        kwin,
+                    )
+                    .await?,
+                )?,
+                SessionBatchAction::Key { keys, repeat } => {
+                    serde_json::to_value(self.key_sequence(&keys, repeat, portal).await?)?
+                }
+                SessionBatchAction::HoldKey { keys, duration_ms } => {
+                    serde_json::to_value(self.hold_keys(&keys, duration_ms, portal).await?)?
+                }
+                SessionBatchAction::Drag {
+                    from_x,
+                    from_y,
+                    to_x,
+                    to_y,
+                    allowed_bundle_ids,
+                    host_bundle_id,
+                } => serde_json::to_value(
+                    self.drag(
+                        &allowed_bundle_ids,
+                        &host_bundle_id,
+                        from_x,
+                        from_y,
+                        to_x,
+                        to_y,
+                        portal,
+                        kwin,
+                    )
+                    .await?,
+                )?,
+                SessionBatchAction::LeftMouseDown => {
+                    serde_json::to_value(portal.left_mouse_down().await?)?
+                }
+                SessionBatchAction::LeftMouseUp => serde_json::to_value(portal.left_mouse_up().await?)?,
+                SessionBatchAction::Screenshot { display } => serde_json::to_value(
+                    capture
+                        .capture_still_frame(display.as_deref(), portal, kwin)
+                        .await?,
+                )?,
+                SessionBatchAction::Zoom { display, x, y, w, h } => serde_json::to_value(
+                    capture
+                        .capture_zoom(display.as_deref(), x, y, w, h, portal, kwin)
+                        .await?,
+                )?,
+            };
+
+            results.push(value);
+        }
+
+        Ok(SessionBatchResult { results })
     }
 }
 

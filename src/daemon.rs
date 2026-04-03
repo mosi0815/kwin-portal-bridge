@@ -25,10 +25,17 @@ pub enum SessionRequest {
         x: f64,
         y: f64,
     },
+    MovePointerScreenPoint {
+        screen: ScreenInfo,
+        x: i32,
+        y: i32,
+    },
     PointerButton {
         button: i32,
         pressed: bool,
     },
+    LeftMouseDown,
+    LeftMouseUp,
     KeyboardKeycode {
         keycode: i32,
         pressed: bool,
@@ -270,9 +277,14 @@ async fn handle_request(
         SessionRequest::MovePointerAbsolute { stream, x, y } => {
             respond_async(session.move_pointer_absolute(stream, x, y).await)
         }
+        SessionRequest::MovePointerScreenPoint { screen, x, y } => {
+            respond_async(session.move_pointer_screen_point(&screen, x, y).await)
+        }
         SessionRequest::PointerButton { button, pressed } => {
             respond_async(session.pointer_button(button, pressed).await)
         }
+        SessionRequest::LeftMouseDown => respond_async(session.left_mouse_down().await),
+        SessionRequest::LeftMouseUp => respond_async(session.left_mouse_up().await),
         SessionRequest::KeyboardKeycode { keycode, pressed } => {
             respond_async(session.keyboard_keycode(keycode, pressed).await)
         }

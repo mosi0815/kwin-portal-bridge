@@ -19,6 +19,7 @@ use crate::daemon::{serve_session_daemon, start_session_daemon, stop_session_dae
 use crate::executor::ExecutorBackend;
 use crate::json::print_json;
 use crate::kwin::KWinBackend;
+use crate::model::SessionBatchRequest;
 use crate::portal::PortalBackend;
 
 #[tokio::main]
@@ -40,6 +41,10 @@ async fn main() -> Result<()> {
         Command::SessionEnd => {
             stop_session_daemon().await?;
             print_json(&serde_json::json!({ "ended": true }))?;
+        }
+        Command::SessionBatch { json } => {
+            let batch: SessionBatchRequest = serde_json::from_str(&json)?;
+            print_json(&executor.session_batch(batch, &capture, &portal, &kwin).await?)?;
         }
         Command::Doctor => {
             print_json(&kwin.doctor()?)?;
@@ -159,6 +164,12 @@ async fn main() -> Result<()> {
                     )
                     .await?,
             )?;
+        }
+        Command::LeftMouseDown => {
+            print_json(&portal.left_mouse_down().await?)?;
+        }
+        Command::LeftMouseUp => {
+            print_json(&portal.left_mouse_up().await?)?;
         }
         Command::PrepareForAction {
             allowed_bundle_ids,
