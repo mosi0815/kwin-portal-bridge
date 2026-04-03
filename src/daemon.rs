@@ -8,9 +8,14 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
+use wl_clipboard_rs::copy::{MimeType as CopyMimeType, Options as CopyOptions, Source as CopySource};
+use wl_clipboard_rs::paste::{ClipboardType, MimeType as PasteMimeType, Seat, get_contents};
 
 use crate::capture::{screenshot_result_from_frame, zoom_result_from_frame};
-use crate::model::{PortalSessionInfo, ScreenInfo, ScreenshotCapture, ScreenshotResult};
+use crate::model::{
+    ClipboardReadResult, ClipboardWriteResult, PortalSessionInfo, ScreenInfo, ScreenshotCapture,
+    ScreenshotResult,
+};
 use crate::portal::LivePortalSession;
 
 #[cfg(unix)]
@@ -39,6 +44,9 @@ pub enum SessionRequest {
     KeyboardKeycode {
         keycode: i32,
         pressed: bool,
+    },
+    TypeText {
+        text: String,
     },
     ClickScreenPoint {
         screen: ScreenInfo,
@@ -79,6 +87,10 @@ pub enum SessionRequest {
         y: i32,
         w: i32,
         h: i32,
+    },
+    ReadClipboard,
+    WriteClipboard {
+        text: String,
     },
 }
 
@@ -288,6 +300,7 @@ async fn handle_request(
         SessionRequest::KeyboardKeycode { keycode, pressed } => {
             respond_async(session.keyboard_keycode(keycode, pressed).await)
         }
+        SessionRequest::TypeText { text } => respond_async(session.type_text(&text).await),
         SessionRequest::ClickScreenPoint {
             screen,
             x,
@@ -329,6 +342,8 @@ async fn handle_request(
         SessionRequest::CaptureZoom { screen, x, y, w, h } => {
             respond_async(capture_zoom(session, &screen, x, y, w, h).await)
         }
+        SessionRequest::ReadClipboard => respond_async(read_clipboard().await),
+        SessionRequest::WriteClipboard { text } => respond_async(write_clipboard(text).await),
     };
 
     (result, false)
@@ -378,4 +393,73 @@ fn respond_async<T: Serialize>(result: Result<T>) -> SessionResponse {
             error: Some(format!("{error:#}")),
         },
     }
+}
+
+async fn read_clipboard() -> Result<ClipboardReadResult> {
+    let text = tokio::task::spawn_blocking(read_clipboard_sync)
+        .await
+        .context("clipboard read worker task failed to join")??;
+
+    Ok(ClipboardReadResult {
+        action: "read-clipboard".to_owned(),
+        text,
+    })
+}
+
+async fn write_clipboard(text: String) -> Result<ClipboardWriteResult> {
+    let text_for_write = text.clone();
+    tokio::task::spawn_blocking(move || write_clipboard_sync(&text_for_write))
+        .await
+        .context("clipboard write worker task failed to join")??;
+
+    for _ in 0..20 {
+        let observed = tokio::task::spawn_blocking(read_clipboard_sync)
+            .await
+            .context("clipboard verification worker task failed to join")?;
+        if let Ok(observed) = observed
+            && observed == text
+        {
+            return Ok(ClipboardWriteResult {
+                action: "write-clipboard".to_owned(),
+                char_count: text.chars().count(),
+                text,
+            });
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    Ok(ClipboardWriteResult {
+        action: "write-clipboard".to_owned(),
+        char_count: text.chars().count(),
+        text,
+    })
+}
+
+fn read_clipboard_sync() -> Result<String> {
+    use std::io::Read;
+
+    let (mut pipe, _) = get_contents(
+        ClipboardType::Regular,
+        Seat::Unspecified,
+        PasteMimeType::Text,
+    )
+    .context("failed to read clipboard through wl-clipboard-rs")?;
+
+    let mut bytes = Vec::new();
+    pipe.read_to_end(&mut bytes)
+        .context("failed to read clipboard bytes")?;
+    while bytes.last() == Some(&b'\n') {
+        bytes.pop();
+    }
+
+    String::from_utf8(bytes).context("clipboard contents were not valid UTF-8")
+}
+
+fn write_clipboard_sync(text: &str) -> Result<()> {
+    CopyOptions::new()
+        .copy(
+            CopySource::Bytes(text.as_bytes().to_vec().into()),
+            CopyMimeType::Text,
+        )
+        .context("failed to write clipboard through wl-clipboard-rs")
 }

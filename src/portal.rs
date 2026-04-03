@@ -15,9 +15,9 @@ use lamco_portal::{PortalConfig, PortalManager, PortalSessionHandle};
 
 use crate::daemon::{SessionRequest, request};
 use crate::model::{
-    ButtonStateResult, CapturedFrame, FrameInfo, FrameProbeResult, PortalActionResult,
-    PortalSessionInfo, PortalStream, ScreenInfo, ScreenshotCapture, ScreenshotResult,
-    StreamSelection,
+    ButtonStateResult, CapturedFrame, ClipboardReadResult, ClipboardWriteResult, FrameInfo,
+    FrameProbeResult, PortalActionResult, PortalSessionInfo, PortalStream, ScreenInfo,
+    ScreenshotCapture, ScreenshotResult, StreamSelection, TypeActionResult,
 };
 use crate::token_store::TokenStore;
 
@@ -147,6 +147,24 @@ impl PortalBackend {
         request(SessionRequest::KeySequence {
             keycodes: keycodes.to_vec(),
             repeat,
+        })
+        .await
+    }
+
+    pub async fn type_text(&self, text: &str) -> Result<TypeActionResult> {
+        request(SessionRequest::TypeText {
+            text: text.to_owned(),
+        })
+        .await
+    }
+
+    pub async fn read_clipboard(&self) -> Result<ClipboardReadResult> {
+        request(SessionRequest::ReadClipboard).await
+    }
+
+    pub async fn write_clipboard(&self, text: &str) -> Result<ClipboardWriteResult> {
+        request(SessionRequest::WriteClipboard {
+            text: text.to_owned(),
         })
         .await
     }
@@ -593,6 +611,38 @@ impl LivePortalSession {
         })
     }
 
+    pub async fn type_text(&mut self, text: &str) -> Result<TypeActionResult> {
+        for ch in text.chars() {
+            let keysym = char_to_keysym(ch)?;
+            self.manager
+                .remote_desktop()
+                .notify_keyboard_keysym(self.session.ashpd_session(), keysym, true)
+                .await
+                .with_context(|| {
+                    format!(
+                        "failed to press keysym 0x{keysym:08X} for character {:?}",
+                        ch
+                    )
+                })?;
+            self.manager
+                .remote_desktop()
+                .notify_keyboard_keysym(self.session.ashpd_session(), keysym, false)
+                .await
+                .with_context(|| {
+                    format!(
+                        "failed to release keysym 0x{keysym:08X} for character {:?}",
+                        ch
+                    )
+                })?;
+        }
+
+        Ok(TypeActionResult {
+            action: "type".to_owned(),
+            text: text.to_owned(),
+            char_count: text.chars().count(),
+        })
+    }
+
     pub async fn drag_screen_points(
         &mut self,
         from_screen: &ScreenInfo,
@@ -856,6 +906,22 @@ fn read_one_pipewire_frame(fd: OwnedFd, stream_info: PwStreamInfo) -> Result<Vid
 
     pipewire.manager.shutdown()?;
     Ok(frame)
+}
+
+fn char_to_keysym(ch: char) -> Result<i32> {
+    let codepoint = u32::from(ch);
+    let keysym = match ch {
+        '\u{8}' => 0xFF08,
+        '\t' => 0xFF09,
+        '\n' | '\r' => 0xFF0D,
+        '\u{1B}' => 0xFF1B,
+        '\u{7F}' => 0xFFFF,
+        _ if (0x20..=0x7E).contains(&codepoint) || (0xA0..=0xFF).contains(&codepoint) => codepoint,
+        _ if codepoint <= 0x10_FFFF => 0x0100_0000 | codepoint,
+        _ => bail!("character {:?} is outside the supported Unicode range", ch),
+    };
+
+    i32::try_from(keysym).context("keysym did not fit into i32")
 }
 
 fn ensure_pipewire_stream(

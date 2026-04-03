@@ -101,12 +101,24 @@ pub enum Command {
         #[arg(long)]
         repeat: Option<u32>,
     },
+    /// Type text through the portal using keysyms instead of keycode chords.
+    Type {
+        #[arg(long)]
+        text: String,
+    },
     /// Hold one or more keys for a fixed duration in milliseconds.
     HoldKey {
         #[arg(long = "key", required = true)]
         keys: Vec<String>,
         #[arg(long)]
         duration_ms: u64,
+    },
+    /// Read text from the local clipboard while the session lock is active.
+    ReadClipboard,
+    /// Write text to the local clipboard while the session lock is active.
+    WriteClipboard {
+        #[arg(long)]
+        text: String,
     },
     /// Drag with the left mouse button in one atomic portal session.
     Drag {

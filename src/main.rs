@@ -139,8 +139,17 @@ async fn main() -> Result<()> {
         Command::KeySequence { keys, repeat } => {
             print_json(&executor.key_sequence(&keys, repeat, &portal).await?)?;
         }
+        Command::Type { text } => {
+            print_json(&executor.type_text(&text, &portal).await?)?;
+        }
         Command::HoldKey { keys, duration_ms } => {
             print_json(&executor.hold_keys(&keys, duration_ms, &portal).await?)?;
+        }
+        Command::ReadClipboard => {
+            print_json(&portal.read_clipboard().await?)?;
+        }
+        Command::WriteClipboard { text } => {
+            print_json(&portal.write_clipboard(&text).await?)?;
         }
         Command::Drag {
             allowed_bundle_ids,

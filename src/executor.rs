@@ -8,7 +8,7 @@ use crate::kwin::KWinBackend;
 use crate::model::{
     AppRef, DragActionResult, KeyboardActionResult, PointerActionResult, PrepareActionResult,
     RaiseWindowAtPointResult, ResolvePrepareCaptureResult, ScreenInfo, ScreenshotResult,
-    SessionBatchAction, SessionBatchRequest, SessionBatchResult, WindowInfo,
+    SessionBatchAction, SessionBatchRequest, SessionBatchResult, TypeActionResult, WindowInfo,
 };
 use crate::portal::PortalBackend;
 
@@ -252,6 +252,14 @@ impl ExecutorBackend {
         })
     }
 
+    pub async fn type_text(
+        &self,
+        text: &str,
+        portal: &PortalBackend,
+    ) -> Result<TypeActionResult> {
+        portal.type_text(text).await
+    }
+
     pub async fn drag(
         &self,
         allowed_bundle_ids: &[String],
@@ -467,6 +475,9 @@ impl ExecutorBackend {
                 )?,
                 SessionBatchAction::Key { keys, repeat } => {
                     serde_json::to_value(self.key_sequence(&keys, repeat, portal).await?)?
+                }
+                SessionBatchAction::Type { text } => {
+                    serde_json::to_value(self.type_text(&text, portal).await?)?
                 }
                 SessionBatchAction::HoldKey { keys, duration_ms } => {
                     serde_json::to_value(self.hold_keys(&keys, duration_ms, portal).await?)?

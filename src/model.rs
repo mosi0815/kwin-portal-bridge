@@ -116,6 +116,29 @@ pub struct KeyboardActionResult {
     pub duration_ms: Option<u64>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TypeActionResult {
+    pub action: String,
+    pub text: String,
+    pub char_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClipboardReadResult {
+    pub action: String,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClipboardWriteResult {
+    pub action: String,
+    pub text: String,
+    pub char_count: usize,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DragActionResult {
@@ -273,6 +296,9 @@ pub enum SessionBatchAction {
         keys: String,
         #[serde(default)]
         repeat: Option<u32>,
+    },
+    Type {
+        text: String,
     },
     HoldKey {
         keys: Vec<String>,
