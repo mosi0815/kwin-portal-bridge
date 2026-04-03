@@ -48,7 +48,7 @@ pub struct ExcludeUpdate {
     pub value: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScreenshotResult {
     pub base64: String,
@@ -61,7 +61,7 @@ pub struct ScreenshotResult {
     pub origin_y: i32,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScreenshotCapture {
     pub base64: String,
     pub width: u32,
@@ -117,6 +117,20 @@ pub struct KeyboardActionResult {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct DragActionResult {
+    pub action: String,
+    pub from_x: i32,
+    pub from_y: i32,
+    pub to_x: i32,
+    pub to_y: i32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub raised: Option<AppRef>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub blocked_by: Option<AppRef>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ResolvePrepareCaptureResult {
     pub base64: String,
     pub width: u32,
@@ -144,7 +158,7 @@ pub struct DoctorReport {
     pub tools: Vec<ToolPresence>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PortalStream {
     pub node_id: u32,
     pub source_type: String,
@@ -152,7 +166,7 @@ pub struct PortalStream {
     pub size: [i32; 2],
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PortalSessionInfo {
     pub session_id: String,
     pub pipewire_fd: i32,
@@ -161,12 +175,12 @@ pub struct PortalSessionInfo {
     pub streams: Vec<PortalStream>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StreamSelection {
     pub stream: PortalStream,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PortalActionResult {
     pub action: String,
     pub session: PortalSessionInfo,
@@ -194,7 +208,7 @@ pub struct FrameInfo {
     pub damage_regions: usize,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SavedImageResult {
     pub path: String,
     pub width: u32,

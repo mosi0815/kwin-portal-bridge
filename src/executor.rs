@@ -6,9 +6,9 @@ use crate::capture::{CaptureBackend, resolve_screen};
 use crate::exclude_state::ExcludeStateStore;
 use crate::kwin::KWinBackend;
 use crate::model::{
-    AppRef, KeyboardActionResult, PointerActionResult, PrepareActionResult,
-    RaiseWindowAtPointResult, ResolvePrepareCaptureResult, ScreenInfo, ScreenshotResult,
-    WindowInfo,
+    AppRef, DragActionResult, KeyboardActionResult, PointerActionResult,
+    PrepareActionResult, RaiseWindowAtPointResult, ResolvePrepareCaptureResult, ScreenInfo,
+    ScreenshotResult, WindowInfo,
 };
 use crate::portal::PortalBackend;
 
@@ -229,6 +229,55 @@ impl ExecutorBackend {
             keys: key_names.to_vec(),
             repeat: None,
             duration_ms: Some(duration_ms),
+        })
+    }
+
+    pub async fn drag(
+        &self,
+        allowed_bundle_ids: &[String],
+        host_bundle_id: &str,
+        from_x: i32,
+        from_y: i32,
+        to_x: i32,
+        to_y: i32,
+        portal: &PortalBackend,
+        kwin: &KWinBackend,
+    ) -> Result<DragActionResult> {
+        let screens = kwin.list_screens()?;
+        let from_screen = screen_at_point(&screens, from_x, from_y)?;
+        let to_screen = screen_at_point(&screens, to_x, to_y)?;
+        let raise = self.raise_allowed_window_at_point(
+            allowed_bundle_ids,
+            host_bundle_id,
+            from_x,
+            from_y,
+            kwin,
+        )?;
+
+        if let Some(blocked_by) = raise.blocked_by {
+            return Ok(DragActionResult {
+                action: "drag-blocked".to_owned(),
+                from_x,
+                from_y,
+                to_x,
+                to_y,
+                raised: raise.raised,
+                blocked_by: Some(blocked_by),
+            });
+        }
+
+        portal
+            .drag_screen_points(from_screen, from_x, from_y, to_screen, to_x, to_y)
+            .await?;
+
+        Ok(DragActionResult {
+            action: "drag".to_owned(),
+            from_x,
+            from_y,
+            to_x,
+            to_y,
+            raised: raise.raised,
+            blocked_by: None,
         })
     }
 

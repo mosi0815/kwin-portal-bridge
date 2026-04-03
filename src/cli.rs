@@ -13,6 +13,10 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Start a long-lived portal session daemon for this tool-use lock.
+    SessionStart,
+    /// End the long-lived portal session daemon for this tool-use lock.
+    SessionEnd,
     /// Show which local desktop integration tools are available.
     Doctor,
     /// Enumerate screens through a KWin script.
@@ -99,6 +103,21 @@ pub enum Command {
         #[arg(long)]
         duration_ms: u64,
     },
+    /// Drag with the left mouse button in one atomic portal session.
+    Drag {
+        #[arg(long = "allowed-bundle-id")]
+        allowed_bundle_ids: Vec<String>,
+        #[arg(long, default_value = "com.anthropic.claude-code.cli-no-window")]
+        host_bundle_id: String,
+        #[arg(long)]
+        from_x: i32,
+        #[arg(long)]
+        from_y: i32,
+        #[arg(long)]
+        to_x: i32,
+        #[arg(long)]
+        to_y: i32,
+    },
     /// Persistently mark disallowed windows as excludeFromCapture until restored.
     PrepareForAction {
         #[arg(long = "allowed-bundle-id")]
@@ -177,5 +196,10 @@ pub enum Command {
         stream: Option<u32>,
         #[arg(long, default_value = "/tmp/kwin-portal-bridge-frame.png")]
         output: String,
+    },
+    #[command(hide = true)]
+    ServeSession {
+        #[arg(long)]
+        socket: String,
     },
 }

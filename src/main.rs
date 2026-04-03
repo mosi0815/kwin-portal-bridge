@@ -1,5 +1,6 @@
 mod capture;
 mod cli;
+mod daemon;
 mod exclude_state;
 mod executor;
 mod json;
@@ -14,6 +15,7 @@ use tracing_subscriber::EnvFilter;
 
 use crate::capture::CaptureBackend;
 use crate::cli::{Cli, Command};
+use crate::daemon::{serve_session_daemon, start_session_daemon, stop_session_daemon};
 use crate::executor::ExecutorBackend;
 use crate::json::print_json;
 use crate::kwin::KWinBackend;
@@ -32,6 +34,13 @@ async fn main() -> Result<()> {
     let portal = PortalBackend::new();
 
     match cli.command {
+        Command::SessionStart => {
+            print_json(&start_session_daemon().await?)?;
+        }
+        Command::SessionEnd => {
+            stop_session_daemon().await?;
+            print_json(&serde_json::json!({ "ended": true }))?;
+        }
         Command::Doctor => {
             print_json(&kwin.doctor()?)?;
         }
@@ -128,6 +137,29 @@ async fn main() -> Result<()> {
         Command::HoldKey { keys, duration_ms } => {
             print_json(&executor.hold_keys(&keys, duration_ms, &portal).await?)?;
         }
+        Command::Drag {
+            allowed_bundle_ids,
+            host_bundle_id,
+            from_x,
+            from_y,
+            to_x,
+            to_y,
+        } => {
+            print_json(
+                &executor
+                    .drag(
+                        &allowed_bundle_ids,
+                        &host_bundle_id,
+                        from_x,
+                        from_y,
+                        to_x,
+                        to_y,
+                        &portal,
+                        &kwin,
+                    )
+                    .await?,
+            )?;
+        }
         Command::PrepareForAction {
             allowed_bundle_ids,
             host_bundle_id,
@@ -197,6 +229,9 @@ async fn main() -> Result<()> {
         }
         Command::SavePng { stream, output } => {
             print_json(&capture.save_png(&portal, stream, &output).await?)?;
+        }
+        Command::ServeSession { socket } => {
+            serve_session_daemon(std::path::PathBuf::from(socket)).await?;
         }
     }
 

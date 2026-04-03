@@ -29,29 +29,7 @@ impl CaptureBackend {
     ) -> Result<ScreenshotResult> {
         let screens = kwin.list_screens()?;
         let screen = resolve_screen(&screens, display)?;
-        let captured = portal.capture_screen_frame(screen).await.with_context(|| {
-            format!("failed to capture portal frame for display `{}`", screen.id)
-        })?;
-        let rgb = rgb_from_frame(&captured.frame)?;
-        let encoded = encode_resized_jpeg_base64(
-            &rgb,
-            compute_target_dims(
-                screen.geometry.width as u32,
-                screen.geometry.height as u32,
-                screen.scale.unwrap_or(1.0),
-            ),
-        )?;
-
-        Ok(ScreenshotResult {
-            base64: encoded.base64,
-            width: encoded.width,
-            height: encoded.height,
-            display_width: screen.geometry.width as u32,
-            display_height: screen.geometry.height as u32,
-            display_id: screen.id.clone(),
-            origin_x: screen.geometry.x,
-            origin_y: screen.geometry.y,
-        })
+        portal.capture_still_image(screen).await
     }
 
     pub async fn capture_zoom(
@@ -70,16 +48,7 @@ impl CaptureBackend {
 
         let screens = kwin.list_screens()?;
         let screen = resolve_screen(&screens, display)?;
-        let captured = portal.capture_screen_frame(screen).await.with_context(|| {
-            format!("failed to capture portal frame for display `{}`", screen.id)
-        })?;
-        let rgb = rgb_from_frame(&captured.frame)?;
-        let cropped = crop_logical_region(&rgb, screen, x, y, w, h)?;
-
-        encode_resized_jpeg_base64(
-            &cropped,
-            compute_target_dims(w as u32, h as u32, screen.scale.unwrap_or(1.0)),
-        )
+        portal.capture_zoom_image(screen, x, y, w, h).await
     }
 
     pub async fn save_png(
@@ -109,6 +78,49 @@ impl CaptureBackend {
             bytes: captured.frame_byte_len,
         })
     }
+}
+
+pub(crate) fn screenshot_result_from_frame(
+    screen: &ScreenInfo,
+    frame: &VideoFrame,
+) -> Result<ScreenshotResult> {
+    let rgb = rgb_from_frame(frame)?;
+    let encoded = encode_resized_jpeg_base64(
+        &rgb,
+        compute_target_dims(
+            screen.geometry.width as u32,
+            screen.geometry.height as u32,
+            screen.scale.unwrap_or(1.0),
+        ),
+    )?;
+
+    Ok(ScreenshotResult {
+        base64: encoded.base64,
+        width: encoded.width,
+        height: encoded.height,
+        display_width: screen.geometry.width as u32,
+        display_height: screen.geometry.height as u32,
+        display_id: screen.id.clone(),
+        origin_x: screen.geometry.x,
+        origin_y: screen.geometry.y,
+    })
+}
+
+pub(crate) fn zoom_result_from_frame(
+    screen: &ScreenInfo,
+    frame: &VideoFrame,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+) -> Result<ScreenshotCapture> {
+    let rgb = rgb_from_frame(frame)?;
+    let cropped = crop_logical_region(&rgb, screen, x, y, w, h)?;
+
+    encode_resized_jpeg_base64(
+        &cropped,
+        compute_target_dims(w as u32, h as u32, screen.scale.unwrap_or(1.0)),
+    )
 }
 
 fn rgba_from_frame(frame: &VideoFrame) -> Result<Vec<u8>> {

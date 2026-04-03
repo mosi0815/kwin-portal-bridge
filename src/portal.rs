@@ -1,4 +1,5 @@
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::collections::HashSet;
+use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd};
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{sync::mpsc as std_mpsc, time::Duration};
 
@@ -12,13 +13,25 @@ use lamco_pipewire::{
 };
 use lamco_portal::{PortalConfig, PortalManager, PortalSessionHandle};
 
+use crate::daemon::{SessionRequest, request};
 use crate::model::{
     CapturedFrame, FrameInfo, FrameProbeResult, PortalActionResult, PortalSessionInfo,
-    PortalStream, ScreenInfo, StreamSelection,
+    PortalStream, ScreenInfo, ScreenshotCapture, ScreenshotResult, StreamSelection,
 };
 use crate::token_store::TokenStore;
 
 pub struct PortalBackend;
+pub struct LivePortalSession {
+    manager: PortalManager,
+    session: PortalSessionHandle,
+    restore_token: Option<String>,
+    pipewire: Option<PersistentPipeWire>,
+}
+
+struct PersistentPipeWire {
+    manager: PipeWireThreadManager,
+    active_streams: HashSet<u32>,
+}
 
 impl PortalBackend {
     pub fn new() -> Self {
@@ -26,11 +39,7 @@ impl PortalBackend {
     }
 
     pub async fn create_session(&self) -> Result<PortalSessionInfo> {
-        let (manager, session, restore_token) = start_session().await?;
-        let info = session_info(&session, restore_token);
-        manager.cleanup().await.ok();
-        drop(session);
-        Ok(info)
+        request(SessionRequest::SessionInfo).await
     }
 
     pub async fn move_pointer_absolute(
@@ -39,47 +48,11 @@ impl PortalBackend {
         x: f64,
         y: f64,
     ) -> Result<PortalActionResult> {
-        let (manager, session, restore_token) = start_session().await?;
-        let stream = selected_stream(&session, stream)?;
-
-        manager
-            .remote_desktop()
-            .notify_pointer_motion_absolute(session.ashpd_session(), stream.stream.node_id, x, y)
-            .await
-            .context("failed to send absolute pointer motion through the portal")?;
-
-        let result = PortalActionResult {
-            action: "mouse-move".to_owned(),
-            session: session_info(&session, restore_token),
-            target_stream: Some(stream),
-        };
-
-        manager.cleanup().await.ok();
-        drop(session);
-        Ok(result)
+        request(SessionRequest::MovePointerAbsolute { stream, x, y }).await
     }
 
     pub async fn pointer_button(&self, button: i32, pressed: bool) -> Result<PortalActionResult> {
-        let (manager, session, restore_token) = start_session().await?;
-        manager
-            .remote_desktop()
-            .notify_pointer_button(session.ashpd_session(), button, pressed)
-            .await
-            .context("failed to send pointer button event through the portal")?;
-
-        let result = PortalActionResult {
-            action: if pressed {
-                "mouse-button-press".to_owned()
-            } else {
-                "mouse-button-release".to_owned()
-            },
-            session: session_info(&session, restore_token),
-            target_stream: None,
-        };
-
-        manager.cleanup().await.ok();
-        drop(session);
-        Ok(result)
+        request(SessionRequest::PointerButton { button, pressed }).await
     }
 
     pub async fn click_screen_point(
@@ -90,44 +63,14 @@ impl PortalBackend {
         button: i32,
         count: u32,
     ) -> Result<PortalActionResult> {
-        let (manager, session, restore_token) = start_session().await?;
-        let info = session_info(&session, restore_token);
-        let target_stream = match_stream_to_screen(&info.streams, screen)?;
-        let (local_x, local_y) = local_stream_point(screen, &target_stream, x, y)?;
-
-        manager
-            .remote_desktop()
-            .notify_pointer_motion_absolute(
-                session.ashpd_session(),
-                target_stream.stream.node_id,
-                local_x,
-                local_y,
-            )
-            .await
-            .context("failed to move pointer before click")?;
-
-        for _ in 0..count.max(1) {
-            manager
-                .remote_desktop()
-                .notify_pointer_button(session.ashpd_session(), button, true)
-                .await
-                .context("failed to send pointer press through the portal")?;
-            manager
-                .remote_desktop()
-                .notify_pointer_button(session.ashpd_session(), button, false)
-                .await
-                .context("failed to send pointer release through the portal")?;
-        }
-
-        let result = PortalActionResult {
-            action: "click".to_owned(),
-            session: info,
-            target_stream: Some(target_stream),
-        };
-
-        manager.cleanup().await.ok();
-        drop(session);
-        Ok(result)
+        request(SessionRequest::ClickScreenPoint {
+            screen: screen.clone(),
+            x,
+            y,
+            button,
+            count,
+        })
+        .await
     }
 
     pub async fn scroll_screen_point(
@@ -138,37 +81,34 @@ impl PortalBackend {
         dx: f64,
         dy: f64,
     ) -> Result<PortalActionResult> {
-        let (manager, session, restore_token) = start_session().await?;
-        let info = session_info(&session, restore_token);
-        let target_stream = match_stream_to_screen(&info.streams, screen)?;
-        let (local_x, local_y) = local_stream_point(screen, &target_stream, x, y)?;
+        request(SessionRequest::ScrollScreenPoint {
+            screen: screen.clone(),
+            x,
+            y,
+            dx,
+            dy,
+        })
+        .await
+    }
 
-        manager
-            .remote_desktop()
-            .notify_pointer_motion_absolute(
-                session.ashpd_session(),
-                target_stream.stream.node_id,
-                local_x,
-                local_y,
-            )
-            .await
-            .context("failed to move pointer before scroll")?;
-
-        manager
-            .remote_desktop()
-            .notify_pointer_axis(session.ashpd_session(), dx, dy)
-            .await
-            .context("failed to send scroll event through the portal")?;
-
-        let result = PortalActionResult {
-            action: "scroll".to_owned(),
-            session: info,
-            target_stream: Some(target_stream),
-        };
-
-        manager.cleanup().await.ok();
-        drop(session);
-        Ok(result)
+    pub async fn drag_screen_points(
+        &self,
+        from_screen: &ScreenInfo,
+        from_x: i32,
+        from_y: i32,
+        to_screen: &ScreenInfo,
+        to_x: i32,
+        to_y: i32,
+    ) -> Result<PortalActionResult> {
+        request(SessionRequest::DragScreenPoints {
+            from_screen: from_screen.clone(),
+            from_x,
+            from_y,
+            to_screen: to_screen.clone(),
+            to_x,
+            to_y,
+        })
+        .await
     }
 
     pub async fn keyboard_keycode(
@@ -176,58 +116,15 @@ impl PortalBackend {
         keycode: i32,
         pressed: bool,
     ) -> Result<PortalActionResult> {
-        let (manager, session, restore_token) = start_session().await?;
-        manager
-            .remote_desktop()
-            .notify_keyboard_keycode(session.ashpd_session(), keycode, pressed)
-            .await
-            .context("failed to send keyboard keycode through the portal")?;
-
-        let result = PortalActionResult {
-            action: if pressed {
-                "key-press".to_owned()
-            } else {
-                "key-release".to_owned()
-            },
-            session: session_info(&session, restore_token),
-            target_stream: None,
-        };
-
-        manager.cleanup().await.ok();
-        drop(session);
-        Ok(result)
+        request(SessionRequest::KeyboardKeycode { keycode, pressed }).await
     }
 
     pub async fn key_sequence(&self, keycodes: &[i32], repeat: u32) -> Result<PortalActionResult> {
-        let (manager, session, restore_token) = start_session().await?;
-
-        for _ in 0..repeat.max(1) {
-            for &keycode in keycodes {
-                manager
-                    .remote_desktop()
-                    .notify_keyboard_keycode(session.ashpd_session(), keycode, true)
-                    .await
-                    .with_context(|| format!("failed to press keycode {keycode} through the portal"))?;
-            }
-
-            for &keycode in keycodes.iter().rev() {
-                manager
-                    .remote_desktop()
-                    .notify_keyboard_keycode(session.ashpd_session(), keycode, false)
-                    .await
-                    .with_context(|| format!("failed to release keycode {keycode} through the portal"))?;
-            }
-        }
-
-        let result = PortalActionResult {
-            action: "key-sequence".to_owned(),
-            session: session_info(&session, restore_token),
-            target_stream: None,
-        };
-
-        manager.cleanup().await.ok();
-        drop(session);
-        Ok(result)
+        request(SessionRequest::KeySequence {
+            keycodes: keycodes.to_vec(),
+            repeat,
+        })
+        .await
     }
 
     pub async fn hold_key_codes(
@@ -235,35 +132,36 @@ impl PortalBackend {
         keycodes: &[i32],
         duration_ms: u64,
     ) -> Result<PortalActionResult> {
-        let (manager, session, restore_token) = start_session().await?;
+        request(SessionRequest::HoldKeyCodes {
+            keycodes: keycodes.to_vec(),
+            duration_ms,
+        })
+        .await
+    }
 
-        for &keycode in keycodes {
-            manager
-                .remote_desktop()
-                .notify_keyboard_keycode(session.ashpd_session(), keycode, true)
-                .await
-                .with_context(|| format!("failed to press keycode {keycode} through the portal"))?;
-        }
+    pub async fn capture_still_image(&self, screen: &ScreenInfo) -> Result<ScreenshotResult> {
+        request(SessionRequest::CaptureStillFrame {
+            screen: screen.clone(),
+        })
+        .await
+    }
 
-        tokio::time::sleep(Duration::from_millis(duration_ms)).await;
-
-        for &keycode in keycodes.iter().rev() {
-            manager
-                .remote_desktop()
-                .notify_keyboard_keycode(session.ashpd_session(), keycode, false)
-                .await
-                .with_context(|| format!("failed to release keycode {keycode} through the portal"))?;
-        }
-
-        let result = PortalActionResult {
-            action: "hold-key".to_owned(),
-            session: session_info(&session, restore_token),
-            target_stream: None,
-        };
-
-        manager.cleanup().await.ok();
-        drop(session);
-        Ok(result)
+    pub async fn capture_zoom_image(
+        &self,
+        screen: &ScreenInfo,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+    ) -> Result<ScreenshotCapture> {
+        request(SessionRequest::CaptureZoom {
+            screen: screen.clone(),
+            x,
+            y,
+            w,
+            h,
+        })
+        .await
     }
 
     pub async fn read_first_frame(
@@ -283,35 +181,6 @@ impl PortalBackend {
 
     pub async fn capture_raw_frame(&self, stream: Option<u32>) -> Result<CapturedFrame> {
         self.capture_raw_frame_with_options(stream, false).await
-    }
-
-    pub async fn capture_screen_frame(
-        &self,
-        screen: &crate::model::ScreenInfo,
-    ) -> Result<CapturedFrame> {
-        let (manager, session, restore_token) = start_session().await?;
-        let info = session_info(&session, restore_token);
-        let target_stream = match_stream_to_screen(&info.streams, screen)?;
-        let fd = dup_fd(session.pipewire_fd())?;
-        let pw_stream = to_pipewire_stream(&target_stream);
-        let frame = tokio::task::spawn_blocking(move || read_one_pipewire_frame(fd, pw_stream))
-            .await
-            .context("PipeWire frame worker task failed to join")??;
-
-        manager.cleanup().await.ok();
-        drop(session);
-
-        let frame_byte_len = match &frame.buffer {
-            FrameBuffer::Memory(data) => data.len(),
-            FrameBuffer::DmaBuf(_) => 0,
-        };
-
-        Ok(CapturedFrame {
-            session: info,
-            target_stream,
-            frame,
-            frame_byte_len,
-        })
     }
 
     async fn poke_pointer(
@@ -389,6 +258,324 @@ impl PortalBackend {
             frame,
             frame_byte_len,
         })
+    }
+}
+
+impl LivePortalSession {
+    pub async fn open() -> Result<Self> {
+        let (manager, session, restore_token) = start_session().await?;
+        Ok(Self {
+            manager,
+            session,
+            restore_token,
+            pipewire: None,
+        })
+    }
+
+    pub fn info(&self) -> PortalSessionInfo {
+        session_info(&self.session, self.restore_token.clone())
+    }
+
+    pub async fn shutdown(mut self) -> Result<()> {
+        if let Some(mut pipewire) = self.pipewire.take() {
+            pipewire.manager.shutdown().ok();
+        }
+        self.manager.cleanup().await.ok();
+        drop(self.session);
+        Ok(())
+    }
+
+    pub async fn move_pointer_absolute(
+        &mut self,
+        stream: Option<u32>,
+        x: f64,
+        y: f64,
+    ) -> Result<PortalActionResult> {
+        let stream = selected_stream(&self.session, stream)?;
+
+        self.manager
+            .remote_desktop()
+            .notify_pointer_motion_absolute(self.session.ashpd_session(), stream.stream.node_id, x, y)
+            .await
+            .context("failed to send absolute pointer motion through the portal")?;
+
+        Ok(PortalActionResult {
+            action: "mouse-move".to_owned(),
+            session: self.info(),
+            target_stream: Some(stream),
+        })
+    }
+
+    pub async fn pointer_button(&mut self, button: i32, pressed: bool) -> Result<PortalActionResult> {
+        self.manager
+            .remote_desktop()
+            .notify_pointer_button(self.session.ashpd_session(), button, pressed)
+            .await
+            .context("failed to send pointer button event through the portal")?;
+
+        Ok(PortalActionResult {
+            action: if pressed {
+                "mouse-button-press".to_owned()
+            } else {
+                "mouse-button-release".to_owned()
+            },
+            session: self.info(),
+            target_stream: None,
+        })
+    }
+
+    pub async fn keyboard_keycode(
+        &mut self,
+        keycode: i32,
+        pressed: bool,
+    ) -> Result<PortalActionResult> {
+        self.manager
+            .remote_desktop()
+            .notify_keyboard_keycode(self.session.ashpd_session(), keycode, pressed)
+            .await
+            .context("failed to send keyboard keycode through the portal")?;
+
+        Ok(PortalActionResult {
+            action: if pressed {
+                "key-press".to_owned()
+            } else {
+                "key-release".to_owned()
+            },
+            session: self.info(),
+            target_stream: None,
+        })
+    }
+
+    pub async fn click_screen_point(
+        &mut self,
+        screen: &ScreenInfo,
+        x: i32,
+        y: i32,
+        button: i32,
+        count: u32,
+    ) -> Result<PortalActionResult> {
+        let info = self.info();
+        let target_stream = match_stream_to_screen(&info.streams, screen)?;
+        let (local_x, local_y) = local_stream_point(screen, &target_stream, x, y)?;
+
+        self.manager
+            .remote_desktop()
+            .notify_pointer_motion_absolute(
+                self.session.ashpd_session(),
+                target_stream.stream.node_id,
+                local_x,
+                local_y,
+            )
+            .await
+            .context("failed to move pointer before click")?;
+
+        for _ in 0..count.max(1) {
+            self.manager
+                .remote_desktop()
+                .notify_pointer_button(self.session.ashpd_session(), button, true)
+                .await
+                .context("failed to send pointer press through the portal")?;
+            self.manager
+                .remote_desktop()
+                .notify_pointer_button(self.session.ashpd_session(), button, false)
+                .await
+                .context("failed to send pointer release through the portal")?;
+        }
+
+        Ok(PortalActionResult {
+            action: "click".to_owned(),
+            session: info,
+            target_stream: Some(target_stream),
+        })
+    }
+
+    pub async fn scroll_screen_point(
+        &mut self,
+        screen: &ScreenInfo,
+        x: i32,
+        y: i32,
+        dx: f64,
+        dy: f64,
+    ) -> Result<PortalActionResult> {
+        let info = self.info();
+        let target_stream = match_stream_to_screen(&info.streams, screen)?;
+        let (local_x, local_y) = local_stream_point(screen, &target_stream, x, y)?;
+
+        self.manager
+            .remote_desktop()
+            .notify_pointer_motion_absolute(
+                self.session.ashpd_session(),
+                target_stream.stream.node_id,
+                local_x,
+                local_y,
+            )
+            .await
+            .context("failed to move pointer before scroll")?;
+
+        self.manager
+            .remote_desktop()
+            .notify_pointer_axis(self.session.ashpd_session(), dx, dy)
+            .await
+            .context("failed to send scroll event through the portal")?;
+
+        Ok(PortalActionResult {
+            action: "scroll".to_owned(),
+            session: info,
+            target_stream: Some(target_stream),
+        })
+    }
+
+    pub async fn key_sequence(&mut self, keycodes: &[i32], repeat: u32) -> Result<PortalActionResult> {
+        for _ in 0..repeat.max(1) {
+            for &keycode in keycodes {
+                self.manager
+                    .remote_desktop()
+                    .notify_keyboard_keycode(self.session.ashpd_session(), keycode, true)
+                    .await
+                    .with_context(|| format!("failed to press keycode {keycode} through the portal"))?;
+            }
+
+            for &keycode in keycodes.iter().rev() {
+                self.manager
+                    .remote_desktop()
+                    .notify_keyboard_keycode(self.session.ashpd_session(), keycode, false)
+                    .await
+                    .with_context(|| format!("failed to release keycode {keycode} through the portal"))?;
+            }
+        }
+
+        Ok(PortalActionResult {
+            action: "key-sequence".to_owned(),
+            session: self.info(),
+            target_stream: None,
+        })
+    }
+
+    pub async fn hold_key_codes(
+        &mut self,
+        keycodes: &[i32],
+        duration_ms: u64,
+    ) -> Result<PortalActionResult> {
+        for &keycode in keycodes {
+            self.manager
+                .remote_desktop()
+                .notify_keyboard_keycode(self.session.ashpd_session(), keycode, true)
+                .await
+                .with_context(|| format!("failed to press keycode {keycode} through the portal"))?;
+        }
+
+        tokio::time::sleep(Duration::from_millis(duration_ms)).await;
+
+        for &keycode in keycodes.iter().rev() {
+            self.manager
+                .remote_desktop()
+                .notify_keyboard_keycode(self.session.ashpd_session(), keycode, false)
+                .await
+                .with_context(|| format!("failed to release keycode {keycode} through the portal"))?;
+        }
+
+        Ok(PortalActionResult {
+            action: "hold-key".to_owned(),
+            session: self.info(),
+            target_stream: None,
+        })
+    }
+
+    pub async fn drag_screen_points(
+        &mut self,
+        from_screen: &ScreenInfo,
+        from_x: i32,
+        from_y: i32,
+        to_screen: &ScreenInfo,
+        to_x: i32,
+        to_y: i32,
+    ) -> Result<PortalActionResult> {
+        let info = self.info();
+        let from_stream = match_stream_to_screen(&info.streams, from_screen)?;
+        let to_stream = match_stream_to_screen(&info.streams, to_screen)?;
+        let (from_local_x, from_local_y) =
+            local_stream_point(from_screen, &from_stream, from_x, from_y)?;
+        let (to_local_x, to_local_y) = local_stream_point(to_screen, &to_stream, to_x, to_y)?;
+
+        self.manager
+            .remote_desktop()
+            .notify_pointer_motion_absolute(
+                self.session.ashpd_session(),
+                from_stream.stream.node_id,
+                from_local_x,
+                from_local_y,
+            )
+            .await
+            .context("failed to move pointer to drag start")?;
+
+        self.manager
+            .remote_desktop()
+            .notify_pointer_button(self.session.ashpd_session(), 272, true)
+            .await
+            .context("failed to press left button for drag")?;
+
+        let drag_result = async {
+            self.manager
+                .remote_desktop()
+                .notify_pointer_motion_absolute(
+                    self.session.ashpd_session(),
+                    to_stream.stream.node_id,
+                    to_local_x,
+                    to_local_y,
+                )
+                .await
+                .context("failed to move pointer to drag end")
+        }
+        .await;
+
+        let release_result = self
+            .manager
+            .remote_desktop()
+            .notify_pointer_button(self.session.ashpd_session(), 272, false)
+            .await
+            .context("failed to release left button after drag");
+
+        drag_result?;
+        release_result?;
+
+        Ok(PortalActionResult {
+            action: "drag".to_owned(),
+            session: info,
+            target_stream: Some(to_stream),
+        })
+    }
+
+    pub async fn capture_screen_frame(&mut self, screen: &ScreenInfo) -> Result<CapturedFrame> {
+        let info = self.info();
+        let target_stream = match_stream_to_screen(&info.streams, screen)?;
+        let pipewire = self.ensure_pipewire()?;
+        ensure_pipewire_stream(pipewire, &target_stream)?;
+        let frame =
+            recv_frame_for_stream(&pipewire.manager, target_stream.stream.node_id, Duration::from_secs(10))?;
+
+        let frame_byte_len = match &frame.buffer {
+            FrameBuffer::Memory(data) => data.len(),
+            FrameBuffer::DmaBuf(_) => 0,
+        };
+
+        Ok(CapturedFrame {
+            session: info,
+            target_stream,
+            frame,
+            frame_byte_len,
+        })
+    }
+
+    fn ensure_pipewire(&mut self) -> Result<&mut PersistentPipeWire> {
+        if self.pipewire.is_none() {
+            let fd = dup_fd(self.session.pipewire_fd().as_raw_fd())?;
+            self.pipewire = Some(PersistentPipeWire {
+                manager: PipeWireThreadManager::new(fd.into_raw_fd())?,
+                active_streams: HashSet::new(),
+            });
+        }
+
+        Ok(self.pipewire.as_mut().expect("pipewire manager just initialized"))
     }
 }
 
@@ -531,14 +718,43 @@ fn to_pipewire_stream(stream: &StreamSelection) -> PwStreamInfo {
 }
 
 fn read_one_pipewire_frame(fd: OwnedFd, stream_info: PwStreamInfo) -> Result<VideoFrame> {
-    let mut manager = PipeWireThreadManager::new(fd.as_raw_fd())?;
+    let manager = PipeWireThreadManager::new(fd.as_raw_fd())?;
     std::mem::forget(fd);
+    let stream = StreamSelection {
+        stream: PortalStream {
+            node_id: stream_info.node_id,
+            source_type: format!("{:?}", stream_info.source_type),
+            position: [stream_info.position.0, stream_info.position.1],
+            size: [
+                i32::try_from(stream_info.size.0).unwrap_or(i32::MAX),
+                i32::try_from(stream_info.size.1).unwrap_or(i32::MAX),
+            ],
+        },
+    };
+    let mut pipewire = PersistentPipeWire {
+        manager,
+        active_streams: HashSet::new(),
+    };
+    ensure_pipewire_stream(&mut pipewire, &stream)?;
+    let frame = recv_frame_for_stream(&pipewire.manager, stream.stream.node_id, Duration::from_secs(10))?;
+
+    pipewire.manager.shutdown()?;
+    Ok(frame)
+}
+
+fn ensure_pipewire_stream(
+    pipewire: &mut PersistentPipeWire,
+    stream: &StreamSelection,
+) -> Result<()> {
+    if pipewire.active_streams.contains(&stream.stream.node_id) {
+        return Ok(());
+    }
 
     let (response_tx, response_rx) = std_mpsc::sync_channel(1);
     let config = PwStreamConfig {
-        name: format!("monitor-{}", stream_info.node_id),
-        width: stream_info.size.0,
-        height: stream_info.size.1,
+        name: format!("monitor-{}", stream.stream.node_id),
+        width: u32::try_from(stream.stream.size[0]).unwrap_or_default(),
+        height: u32::try_from(stream.stream.size[1]).unwrap_or_default(),
         framerate: 60,
         use_dmabuf: false,
         buffer_count: 3,
@@ -546,9 +762,9 @@ fn read_one_pipewire_frame(fd: OwnedFd, stream_info: PwStreamInfo) -> Result<Vid
         dmabuf_passthrough: false,
     };
 
-    manager.send_command(PipeWireThreadCommand::CreateStream {
-        stream_id: stream_info.node_id,
-        node_id: stream_info.node_id,
+    pipewire.manager.send_command(PipeWireThreadCommand::CreateStream {
+        stream_id: stream.stream.node_id,
+        node_id: stream.stream.node_id,
         config,
         response_tx,
     })?;
@@ -558,27 +774,43 @@ fn read_one_pipewire_frame(fd: OwnedFd, stream_info: PwStreamInfo) -> Result<Vid
         .context("PipeWire create-stream response channel closed")?
         .context("PipeWire rejected stream creation")?;
 
-    let frame = if let Some(frame) = manager.recv_frame_timeout(Duration::from_secs(10)) {
-        frame
+    pipewire.active_streams.insert(stream.stream.node_id);
+    Ok(())
+}
+
+fn recv_frame_for_stream(
+    manager: &PipeWireThreadManager,
+    stream_id: u32,
+    timeout: Duration,
+) -> Result<VideoFrame> {
+    let deadline = std::time::Instant::now() + timeout;
+
+    loop {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+
+        if let Some(frame) = manager.recv_frame_timeout(remaining.min(Duration::from_millis(500))) {
+            if frame.frame_id == u64::from(stream_id) {
+                return Ok(frame);
+            }
+        }
+    }
+
+    let states = manager
+        .drain_state_events()
+        .into_iter()
+        .map(|event| format!("stream {} -> {:?}", event.stream_id, event.state))
+        .collect::<Vec<_>>();
+
+    let states_suffix = if states.is_empty() {
+        "no state events observed".to_owned()
     } else {
-        let states = manager
-            .drain_state_events()
-            .into_iter()
-            .map(|event| format!("stream {} -> {:?}", event.stream_id, event.state))
-            .collect::<Vec<_>>();
-
-        let states_suffix = if states.is_empty() {
-            "no state events observed".to_owned()
-        } else {
-            format!("state events: {}", states.join(", "))
-        };
-
-        manager.shutdown().ok();
-        bail!("timed out waiting for first PipeWire frame ({states_suffix})");
+        format!("state events: {}", states.join(", "))
     };
 
-    manager.shutdown()?;
-    Ok(frame)
+    bail!("timed out waiting for PipeWire frame on stream {stream_id} ({states_suffix})");
 }
 
 fn dup_fd(raw_fd: i32) -> Result<OwnedFd> {
