@@ -94,6 +94,29 @@ pub struct RaiseWindowAtPointResult {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct PointerActionResult {
+    pub action: String,
+    pub x: i32,
+    pub y: i32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub raised: Option<AppRef>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub blocked_by: Option<AppRef>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KeyboardActionResult {
+    pub action: String,
+    pub keys: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repeat: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ResolvePrepareCaptureResult {
     pub base64: String,
     pub width: u32,

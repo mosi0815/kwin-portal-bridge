@@ -14,7 +14,7 @@ use lamco_portal::{PortalConfig, PortalManager, PortalSessionHandle};
 
 use crate::model::{
     CapturedFrame, FrameInfo, FrameProbeResult, PortalActionResult, PortalSessionInfo,
-    PortalStream, StreamSelection,
+    PortalStream, ScreenInfo, StreamSelection,
 };
 use crate::token_store::TokenStore;
 
@@ -82,6 +82,95 @@ impl PortalBackend {
         Ok(result)
     }
 
+    pub async fn click_screen_point(
+        &self,
+        screen: &ScreenInfo,
+        x: i32,
+        y: i32,
+        button: i32,
+        count: u32,
+    ) -> Result<PortalActionResult> {
+        let (manager, session, restore_token) = start_session().await?;
+        let info = session_info(&session, restore_token);
+        let target_stream = match_stream_to_screen(&info.streams, screen)?;
+        let (local_x, local_y) = local_stream_point(screen, &target_stream, x, y)?;
+
+        manager
+            .remote_desktop()
+            .notify_pointer_motion_absolute(
+                session.ashpd_session(),
+                target_stream.stream.node_id,
+                local_x,
+                local_y,
+            )
+            .await
+            .context("failed to move pointer before click")?;
+
+        for _ in 0..count.max(1) {
+            manager
+                .remote_desktop()
+                .notify_pointer_button(session.ashpd_session(), button, true)
+                .await
+                .context("failed to send pointer press through the portal")?;
+            manager
+                .remote_desktop()
+                .notify_pointer_button(session.ashpd_session(), button, false)
+                .await
+                .context("failed to send pointer release through the portal")?;
+        }
+
+        let result = PortalActionResult {
+            action: "click".to_owned(),
+            session: info,
+            target_stream: Some(target_stream),
+        };
+
+        manager.cleanup().await.ok();
+        drop(session);
+        Ok(result)
+    }
+
+    pub async fn scroll_screen_point(
+        &self,
+        screen: &ScreenInfo,
+        x: i32,
+        y: i32,
+        dx: f64,
+        dy: f64,
+    ) -> Result<PortalActionResult> {
+        let (manager, session, restore_token) = start_session().await?;
+        let info = session_info(&session, restore_token);
+        let target_stream = match_stream_to_screen(&info.streams, screen)?;
+        let (local_x, local_y) = local_stream_point(screen, &target_stream, x, y)?;
+
+        manager
+            .remote_desktop()
+            .notify_pointer_motion_absolute(
+                session.ashpd_session(),
+                target_stream.stream.node_id,
+                local_x,
+                local_y,
+            )
+            .await
+            .context("failed to move pointer before scroll")?;
+
+        manager
+            .remote_desktop()
+            .notify_pointer_axis(session.ashpd_session(), dx, dy)
+            .await
+            .context("failed to send scroll event through the portal")?;
+
+        let result = PortalActionResult {
+            action: "scroll".to_owned(),
+            session: info,
+            target_stream: Some(target_stream),
+        };
+
+        manager.cleanup().await.ok();
+        drop(session);
+        Ok(result)
+    }
+
     pub async fn keyboard_keycode(
         &self,
         keycode: i32,
@@ -100,6 +189,74 @@ impl PortalBackend {
             } else {
                 "key-release".to_owned()
             },
+            session: session_info(&session, restore_token),
+            target_stream: None,
+        };
+
+        manager.cleanup().await.ok();
+        drop(session);
+        Ok(result)
+    }
+
+    pub async fn key_sequence(&self, keycodes: &[i32], repeat: u32) -> Result<PortalActionResult> {
+        let (manager, session, restore_token) = start_session().await?;
+
+        for _ in 0..repeat.max(1) {
+            for &keycode in keycodes {
+                manager
+                    .remote_desktop()
+                    .notify_keyboard_keycode(session.ashpd_session(), keycode, true)
+                    .await
+                    .with_context(|| format!("failed to press keycode {keycode} through the portal"))?;
+            }
+
+            for &keycode in keycodes.iter().rev() {
+                manager
+                    .remote_desktop()
+                    .notify_keyboard_keycode(session.ashpd_session(), keycode, false)
+                    .await
+                    .with_context(|| format!("failed to release keycode {keycode} through the portal"))?;
+            }
+        }
+
+        let result = PortalActionResult {
+            action: "key-sequence".to_owned(),
+            session: session_info(&session, restore_token),
+            target_stream: None,
+        };
+
+        manager.cleanup().await.ok();
+        drop(session);
+        Ok(result)
+    }
+
+    pub async fn hold_key_codes(
+        &self,
+        keycodes: &[i32],
+        duration_ms: u64,
+    ) -> Result<PortalActionResult> {
+        let (manager, session, restore_token) = start_session().await?;
+
+        for &keycode in keycodes {
+            manager
+                .remote_desktop()
+                .notify_keyboard_keycode(session.ashpd_session(), keycode, true)
+                .await
+                .with_context(|| format!("failed to press keycode {keycode} through the portal"))?;
+        }
+
+        tokio::time::sleep(Duration::from_millis(duration_ms)).await;
+
+        for &keycode in keycodes.iter().rev() {
+            manager
+                .remote_desktop()
+                .notify_keyboard_keycode(session.ashpd_session(), keycode, false)
+                .await
+                .with_context(|| format!("failed to release keycode {keycode} through the portal"))?;
+        }
+
+        let result = PortalActionResult {
+            action: "hold-key".to_owned(),
             session: session_info(&session, restore_token),
             target_stream: None,
         };
@@ -457,6 +614,32 @@ fn frame_info(frame: &VideoFrame) -> FrameInfo {
     }
 }
 
+fn local_stream_point(
+    screen: &ScreenInfo,
+    target_stream: &StreamSelection,
+    x: i32,
+    y: i32,
+) -> Result<(f64, f64)> {
+    if !point_in_screen(screen, x, y) {
+        bail!(
+            "point {x},{y} is outside display `{}` bounds",
+            screen.id
+        );
+    }
+
+    let local_x = x - screen.geometry.x;
+    let local_y = y - screen.geometry.y;
+    let logical_w = screen.geometry.width.max(1) as f64;
+    let logical_h = screen.geometry.height.max(1) as f64;
+    let stream_w = target_stream.stream.size[0].max(1) as f64;
+    let stream_h = target_stream.stream.size[1].max(1) as f64;
+
+    Ok((
+        ((local_x as f64) / logical_w) * stream_w,
+        ((local_y as f64) / logical_h) * stream_h,
+    ))
+}
+
 fn is_persistence_rejection(error: &anyhow::Error) -> bool {
     let message = format!("{error:#}");
     message.contains("cannot persist") || message.contains("InvalidArgument")
@@ -490,4 +673,11 @@ fn match_stream_to_screen(
     Ok(StreamSelection {
         stream: chosen.clone(),
     })
+}
+
+fn point_in_screen(screen: &ScreenInfo, x: i32, y: i32) -> bool {
+    x >= screen.geometry.x
+        && x < screen.geometry.x.saturating_add(screen.geometry.width)
+        && y >= screen.geometry.y
+        && y < screen.geometry.y.saturating_add(screen.geometry.height)
 }

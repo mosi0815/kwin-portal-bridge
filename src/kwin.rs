@@ -77,28 +77,21 @@ impl KWinBackend {
             SCRIPT_HEADER, window_id, SCRIPT_ACTIVATE_WINDOW
         );
 
-        let payload = run_json_script("kwin-portal-bridge-activate", &script)?;
-        let updated: ActivateWindowResult = parse_payload(payload)?;
+        run_script("kwin-portal-bridge-activate", &script, false)?;
 
-        if updated.window != window_id {
-            bail!(
-                "KWin activated `{}`, but `{window_id}` was requested",
-                updated.window
-            );
-        }
+        let activated = self
+            .list_windows()?
+            .into_iter()
+            .find(|window| window.is_active)
+            .map(|window| window.id)
+            .ok_or_else(|| anyhow!("KWin did not report an active window after activation"))?;
 
-        if !updated.activated {
-            bail!("KWin did not report the window as active after activation");
+        if activated != window_id {
+            bail!("KWin activated `{activated}`, but `{window_id}` was requested");
         }
 
         Ok(())
     }
-}
-
-#[derive(serde::Deserialize)]
-struct ActivateWindowResult {
-    window: String,
-    activated: bool,
 }
 
 fn parse_payload<T: DeserializeOwned>(payload: String) -> Result<T> {
@@ -126,6 +119,11 @@ fn command_presence(command: &str) -> Result<ToolPresence> {
 }
 
 fn run_json_script(script_name: &str, script_body: &str) -> Result<String> {
+    let payload = run_script(script_name, script_body, true)?;
+    payload.ok_or_else(|| anyhow!("KWin script finished without a result payload"))
+}
+
+fn run_script(script_name: &str, script_body: &str, require_result: bool) -> Result<Option<String>> {
     let kwin_conn =
         Connection::new_session().context("failed to connect to the session bus for KWin")?;
     let kwin_proxy = kwin_conn.with_proxy("org.kde.KWin", "/Scripting", DBUS_TIMEOUT);
@@ -183,9 +181,12 @@ fn run_json_script(script_name: &str, script_body: &str) -> Result<String> {
             .context("failed while waiting for KWin script output")?;
     }
 
-    let _: () = script_proxy
-        .method_call("org.kde.kwin.Script", "stop", ())
-        .context("failed to stop the KWin script")?;
+    if let Err(error) = script_proxy.method_call::<(), _, _, _>("org.kde.kwin.Script", "stop", ()) {
+        let message = format!("{error:#}");
+        if !message.contains("No such object path") {
+            return Err(error).context("failed to stop the KWin script");
+        }
+    }
 
     let received = messages
         .lock()
@@ -198,8 +199,11 @@ fn run_json_script(script_name: &str, script_body: &str) -> Result<String> {
     let payload = received
         .iter()
         .find(|(kind, _)| kind == "result")
-        .map(|(_, payload)| payload.clone())
-        .ok_or_else(|| anyhow!("KWin script finished without a result payload"))?;
+        .map(|(_, payload)| payload.clone());
+
+    if require_result && payload.is_none() {
+        bail!("KWin script finished without a result payload");
+    }
 
     Ok(payload)
 }
@@ -335,11 +339,6 @@ try {
     }
 
     workspace.activeWindow = target;
-
-    bridgeResult({
-        window: String(target.internalId),
-        activated: workspace.activeWindow === target
-    });
 } catch (error) {
     bridgeError(String(error));
 }

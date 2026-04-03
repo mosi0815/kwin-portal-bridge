@@ -76,6 +76,58 @@ async fn main() -> Result<()> {
                 &kwin,
             )?)?;
         }
+        Command::Click {
+            allowed_bundle_ids,
+            host_bundle_id,
+            x,
+            y,
+            button,
+            count,
+        } => {
+            print_json(
+                &executor
+                    .click(
+                        &allowed_bundle_ids,
+                        &host_bundle_id,
+                        x,
+                        y,
+                        &button,
+                        count,
+                        &portal,
+                        &kwin,
+                    )
+                    .await?,
+            )?;
+        }
+        Command::Scroll {
+            allowed_bundle_ids,
+            host_bundle_id,
+            x,
+            y,
+            dx,
+            dy,
+        } => {
+            print_json(
+                &executor
+                    .scroll(
+                        &allowed_bundle_ids,
+                        &host_bundle_id,
+                        x,
+                        y,
+                        dx,
+                        dy,
+                        &portal,
+                        &kwin,
+                    )
+                    .await?,
+            )?;
+        }
+        Command::KeySequence { keys, repeat } => {
+            print_json(&executor.key_sequence(&keys, repeat, &portal).await?)?;
+        }
+        Command::HoldKey { keys, duration_ms } => {
+            print_json(&executor.hold_keys(&keys, duration_ms, &portal).await?)?;
+        }
         Command::PrepareForAction {
             allowed_bundle_ids,
             host_bundle_id,

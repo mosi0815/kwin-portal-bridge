@@ -1,13 +1,14 @@
 use std::collections::HashSet;
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 
 use crate::capture::{CaptureBackend, resolve_screen};
 use crate::exclude_state::ExcludeStateStore;
 use crate::kwin::KWinBackend;
 use crate::model::{
-    AppRef, PrepareActionResult, RaiseWindowAtPointResult, ResolvePrepareCaptureResult,
-    ScreenInfo, ScreenshotResult, WindowInfo,
+    AppRef, KeyboardActionResult, PointerActionResult, PrepareActionResult,
+    RaiseWindowAtPointResult, ResolvePrepareCaptureResult, ScreenInfo, ScreenshotResult,
+    WindowInfo,
 };
 use crate::portal::PortalBackend;
 
@@ -94,6 +95,140 @@ impl ExecutorBackend {
             topmost: Some(topmost),
             raised: Some(app_ref_for_window(target)),
             blocked_by: None,
+        })
+    }
+
+    pub async fn click(
+        &self,
+        allowed_bundle_ids: &[String],
+        host_bundle_id: &str,
+        x: i32,
+        y: i32,
+        button: &str,
+        count: u32,
+        portal: &PortalBackend,
+        kwin: &KWinBackend,
+    ) -> Result<PointerActionResult> {
+        let screens = kwin.list_screens()?;
+        let screen = screen_at_point(&screens, x, y)?;
+        let raise = self.raise_allowed_window_at_point(
+            allowed_bundle_ids,
+            host_bundle_id,
+            x,
+            y,
+            kwin,
+        )?;
+
+        if let Some(blocked_by) = raise.blocked_by {
+            return Ok(PointerActionResult {
+                action: "click-blocked".to_owned(),
+                x,
+                y,
+                raised: raise.raised,
+                blocked_by: Some(blocked_by),
+            });
+        }
+
+        portal
+            .click_screen_point(screen, x, y, button_name_to_evdev(button)?, count)
+            .await?;
+
+        Ok(PointerActionResult {
+            action: "click".to_owned(),
+            x,
+            y,
+            raised: raise.raised,
+            blocked_by: None,
+        })
+    }
+
+    pub async fn scroll(
+        &self,
+        allowed_bundle_ids: &[String],
+        host_bundle_id: &str,
+        x: i32,
+        y: i32,
+        dx: f64,
+        dy: f64,
+        portal: &PortalBackend,
+        kwin: &KWinBackend,
+    ) -> Result<PointerActionResult> {
+        let screens = kwin.list_screens()?;
+        let screen = screen_at_point(&screens, x, y)?;
+        let raise = self.raise_allowed_window_at_point(
+            allowed_bundle_ids,
+            host_bundle_id,
+            x,
+            y,
+            kwin,
+        )?;
+
+        if let Some(blocked_by) = raise.blocked_by {
+            return Ok(PointerActionResult {
+                action: "scroll-blocked".to_owned(),
+                x,
+                y,
+                raised: raise.raised,
+                blocked_by: Some(blocked_by),
+            });
+        }
+
+        portal.scroll_screen_point(screen, x, y, dx, dy).await?;
+
+        Ok(PointerActionResult {
+            action: "scroll".to_owned(),
+            x,
+            y,
+            raised: raise.raised,
+            blocked_by: None,
+        })
+    }
+
+    pub async fn key_sequence(
+        &self,
+        key_sequence: &str,
+        repeat: Option<u32>,
+        portal: &PortalBackend,
+    ) -> Result<KeyboardActionResult> {
+        let key_names = parse_key_sequence(key_sequence)?;
+        let keycodes = key_names
+            .iter()
+            .map(|name| key_name_to_key_code(name))
+            .collect::<Result<Vec<_>>>()?;
+        let repeat = repeat.unwrap_or(1).max(1);
+
+        portal.key_sequence(&keycodes, repeat).await?;
+
+        Ok(KeyboardActionResult {
+            action: "key".to_owned(),
+            keys: key_names,
+            repeat: Some(repeat),
+            duration_ms: None,
+        })
+    }
+
+    pub async fn hold_keys(
+        &self,
+        key_names: &[String],
+        duration_ms: u64,
+        portal: &PortalBackend,
+    ) -> Result<KeyboardActionResult> {
+        if key_names.is_empty() {
+            bail!("hold key list is empty");
+        }
+
+        let keycodes = key_names
+            .iter()
+            .map(|name| key_name_to_key_code(name))
+            .collect::<Result<Vec<_>>>()?;
+
+        portal.hold_key_codes(&keycodes, duration_ms).await?;
+
+        Ok(KeyboardActionResult {
+            action: "hold-key".to_owned(),
+            keys: key_names.to_vec(),
+            repeat: None,
+            duration_ms: Some(duration_ms),
         })
     }
 
@@ -211,6 +346,18 @@ fn resolve_optional_screen<'a>(
     }
 }
 
+fn screen_at_point<'a>(screens: &'a [ScreenInfo], x: i32, y: i32) -> Result<&'a ScreenInfo> {
+    screens
+        .iter()
+        .find(|screen| {
+            x >= screen.geometry.x
+                && x < screen.geometry.x.saturating_add(screen.geometry.width)
+                && y >= screen.geometry.y
+                && y < screen.geometry.y.saturating_add(screen.geometry.height)
+        })
+        .ok_or_else(|| anyhow::anyhow!("point {x},{y} is not inside any known display"))
+}
+
 fn resolve_capture_success(
     screenshot: ScreenshotResult,
     hidden: Vec<String>,
@@ -319,6 +466,95 @@ fn app_ref_for_window(window: &WindowInfo) -> AppRef {
         bundle_id: bundle_id_for_window(window).unwrap_or_else(|| window.id.clone()),
         display_name: display_name_for_window(window),
     }
+}
+
+fn button_name_to_evdev(button: &str) -> Result<i32> {
+    match button.trim().to_ascii_lowercase().as_str() {
+        "left" => Ok(272),
+        "right" => Ok(273),
+        "middle" => Ok(274),
+        "back" => Ok(278),
+        "forward" => Ok(277),
+        other => bail!("unsupported pointer button `{other}`"),
+    }
+}
+
+fn parse_key_sequence(key_sequence: &str) -> Result<Vec<String>> {
+    let parts = key_sequence
+        .split('+')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+
+    if parts.is_empty() {
+        bail!("key sequence is empty");
+    }
+
+    Ok(parts)
+}
+
+fn key_name_to_key_code(name: &str) -> Result<i32> {
+    let normalized = name.trim().to_ascii_lowercase();
+    let code = match normalized.as_str() {
+        "ctrl" | "control" | "leftctrl" => 29,
+        "shift" | "leftshift" => 42,
+        "alt" | "option" | "leftalt" => 56,
+        "meta" | "super" | "command" | "cmd" | "leftmeta" => 125,
+        "enter" | "return" => 28,
+        "tab" => 15,
+        "space" => 57,
+        "backspace" => 14,
+        "delete" => 111,
+        "esc" | "escape" => 1,
+        "up" => 103,
+        "down" => 108,
+        "left" => 105,
+        "right" => 106,
+        "home" => 102,
+        "end" => 107,
+        "pageup" => 104,
+        "pagedown" => 109,
+        "a" => 30,
+        "b" => 48,
+        "c" => 46,
+        "d" => 32,
+        "e" => 18,
+        "f" => 33,
+        "g" => 34,
+        "h" => 35,
+        "i" => 23,
+        "j" => 36,
+        "k" => 37,
+        "l" => 38,
+        "m" => 50,
+        "n" => 49,
+        "o" => 24,
+        "p" => 25,
+        "q" => 16,
+        "r" => 19,
+        "s" => 31,
+        "t" => 20,
+        "u" => 22,
+        "v" => 47,
+        "w" => 17,
+        "x" => 45,
+        "y" => 21,
+        "z" => 44,
+        "0" => 11,
+        "1" => 2,
+        "2" => 3,
+        "3" => 4,
+        "4" => 5,
+        "5" => 6,
+        "6" => 7,
+        "7" => 8,
+        "8" => 9,
+        "9" => 10,
+        _ => bail!("unsupported key name `{name}`"),
+    };
+
+    Ok(code)
 }
 
 fn active_bundle_id(windows: &[WindowInfo]) -> Option<String> {

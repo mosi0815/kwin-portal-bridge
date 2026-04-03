@@ -55,6 +55,50 @@ pub enum Command {
         #[arg(long)]
         y: i32,
     },
+    /// Raise an allowed app at a point if needed, then click through the portal.
+    Click {
+        #[arg(long = "allowed-bundle-id")]
+        allowed_bundle_ids: Vec<String>,
+        #[arg(long, default_value = "com.anthropic.claude-code.cli-no-window")]
+        host_bundle_id: String,
+        #[arg(long)]
+        x: i32,
+        #[arg(long)]
+        y: i32,
+        #[arg(long, default_value = "left")]
+        button: String,
+        #[arg(long, default_value_t = 1)]
+        count: u32,
+    },
+    /// Raise an allowed app at a point if needed, then scroll through the portal.
+    Scroll {
+        #[arg(long = "allowed-bundle-id")]
+        allowed_bundle_ids: Vec<String>,
+        #[arg(long, default_value = "com.anthropic.claude-code.cli-no-window")]
+        host_bundle_id: String,
+        #[arg(long)]
+        x: i32,
+        #[arg(long)]
+        y: i32,
+        #[arg(long, default_value_t = 0.0)]
+        dx: f64,
+        #[arg(long, default_value_t = 0.0)]
+        dy: f64,
+    },
+    /// Send an executor-style key sequence such as `ctrl+c`.
+    KeySequence {
+        #[arg(long)]
+        keys: String,
+        #[arg(long)]
+        repeat: Option<u32>,
+    },
+    /// Hold one or more keys for a fixed duration in milliseconds.
+    HoldKey {
+        #[arg(long = "key", required = true)]
+        keys: Vec<String>,
+        #[arg(long)]
+        duration_ms: u64,
+    },
     /// Persistently mark disallowed windows as excludeFromCapture until restored.
     PrepareForAction {
         #[arg(long = "allowed-bundle-id")]
