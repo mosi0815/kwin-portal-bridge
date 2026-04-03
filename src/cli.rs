@@ -1,0 +1,137 @@
+use clap::{Parser, Subcommand};
+
+#[derive(Debug, Parser)]
+#[command(
+    name = "kwin-portal-bridge",
+    version,
+    about = "KWin + portal support bridge for Linux computer-use tooling."
+)]
+pub struct Cli {
+    #[command(subcommand)]
+    pub command: Command,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum Command {
+    /// Show which local desktop integration tools are available.
+    Doctor,
+    /// Enumerate screens through a KWin script.
+    Screens,
+    /// Enumerate windows through a KWin script.
+    Windows,
+    /// Set or clear excludeFromCapture for one or more KWin windows.
+    SetExclude {
+        #[arg(long = "window", required = true)]
+        windows: Vec<String>,
+        #[arg(long)]
+        value: bool,
+    },
+    /// Preview the set of apps that would be hidden from capture for an action.
+    PreviewHideSet {
+        #[arg(long = "allowed-bundle-id")]
+        allowed_bundle_ids: Vec<String>,
+        #[arg(long, default_value = "com.anthropic.claude-code.cli-no-window")]
+        host_bundle_id: String,
+        #[arg(long)]
+        display: Option<String>,
+    },
+    /// Report the currently active app.
+    FrontmostApp,
+    /// Report the topmost app at a global logical point.
+    AppUnderPoint {
+        #[arg(long)]
+        x: i32,
+        #[arg(long)]
+        y: i32,
+    },
+    /// Raise the topmost allowed app at a point if a disallowed app is covering it.
+    RaiseAllowedAtPoint {
+        #[arg(long = "allowed-bundle-id")]
+        allowed_bundle_ids: Vec<String>,
+        #[arg(long, default_value = "com.anthropic.claude-code.cli-no-window")]
+        host_bundle_id: String,
+        #[arg(long)]
+        x: i32,
+        #[arg(long)]
+        y: i32,
+    },
+    /// Persistently mark disallowed windows as excludeFromCapture until restored.
+    PrepareForAction {
+        #[arg(long = "allowed-bundle-id")]
+        allowed_bundle_ids: Vec<String>,
+        #[arg(long, default_value = "com.anthropic.claude-code.cli-no-window")]
+        host_bundle_id: String,
+        #[arg(long)]
+        display: Option<String>,
+    },
+    /// Restore windows previously hidden by `prepare-for-action`.
+    RestorePrepareState,
+    /// Hide disallowed windows, capture a screenshot result, and restore them immediately.
+    ResolvePrepareCapture {
+        #[arg(long = "allowed-bundle-id")]
+        allowed_bundle_ids: Vec<String>,
+        #[arg(long, default_value = "com.anthropic.claude-code.cli-no-window")]
+        host_bundle_id: String,
+        #[arg(long)]
+        display: Option<String>,
+        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+        do_hide: bool,
+    },
+    /// Capture a still frame through the portal/PipeWire path.
+    Screenshot {
+        #[arg(long)]
+        display: Option<String>,
+    },
+    /// Capture a logical region within a display and return an executor-style zoom image.
+    Zoom {
+        #[arg(long)]
+        display: Option<String>,
+        #[arg(long)]
+        x: i32,
+        #[arg(long)]
+        y: i32,
+        #[arg(long)]
+        w: i32,
+        #[arg(long)]
+        h: i32,
+    },
+    /// Create a combined portal session and print its PipeWire/input metadata.
+    PortalSession,
+    /// Move the pointer to an absolute logical coordinate within a portal stream.
+    MouseMove {
+        #[arg(long)]
+        x: f64,
+        #[arg(long)]
+        y: f64,
+        #[arg(long)]
+        stream: Option<u32>,
+    },
+    /// Send a pointer button press or release through the portal.
+    MouseButton {
+        #[arg(long)]
+        button: i32,
+        #[arg(long)]
+        pressed: bool,
+    },
+    /// Send a keyboard keycode press or release through the portal.
+    Key {
+        #[arg(long)]
+        keycode: i32,
+        #[arg(long)]
+        pressed: bool,
+    },
+    /// Read the first PipeWire frame for a selected portal stream.
+    PipewireFrame {
+        #[arg(long)]
+        stream: Option<u32>,
+        #[arg(long, default_value_t = false)]
+        poke_pointer: bool,
+    },
+    /// Save the first captured frame as a PNG file.
+    SavePng {
+        #[arg(long)]
+        stream: Option<u32>,
+        #[arg(long, default_value = "/tmp/kwin-portal-bridge-frame.png")]
+        output: String,
+    },
+}

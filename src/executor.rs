@@ -1,0 +1,443 @@
+use std::collections::HashSet;
+
+use anyhow::Result;
+
+use crate::capture::{CaptureBackend, resolve_screen};
+use crate::exclude_state::ExcludeStateStore;
+use crate::kwin::KWinBackend;
+use crate::model::{
+    AppRef, PrepareActionResult, RaiseWindowAtPointResult, ResolvePrepareCaptureResult,
+    ScreenInfo, ScreenshotResult, WindowInfo,
+};
+use crate::portal::PortalBackend;
+
+pub struct ExecutorBackend {
+    state: ExcludeStateStore,
+}
+
+impl ExecutorBackend {
+    pub fn new() -> Result<Self> {
+        Ok(Self {
+            state: ExcludeStateStore::new()?,
+        })
+    }
+
+    pub fn preview_hide_set(
+        &self,
+        allowed_bundle_ids: &[String],
+        host_bundle_id: &str,
+        display: Option<&str>,
+        kwin: &KWinBackend,
+    ) -> Result<Vec<AppRef>> {
+        let screens = kwin.list_screens()?;
+        let screen = resolve_optional_screen(&screens, display)?;
+        let windows = kwin.list_windows()?;
+        let candidates = select_hide_candidates(&windows, screen, allowed_bundle_ids, host_bundle_id);
+        Ok(to_app_refs(&candidates))
+    }
+
+    pub fn frontmost_app(&self, kwin: &KWinBackend) -> Result<Option<AppRef>> {
+        let windows = kwin.list_windows()?;
+        Ok(windows.iter().find(|window| window.is_active).map(app_ref_for_window))
+    }
+
+    pub fn app_under_point(&self, x: i32, y: i32, kwin: &KWinBackend) -> Result<Option<AppRef>> {
+        let windows = kwin.list_windows()?;
+        Ok(top_window_at_point(&windows, x, y).map(app_ref_for_window))
+    }
+
+    pub fn raise_allowed_window_at_point(
+        &self,
+        allowed_bundle_ids: &[String],
+        host_bundle_id: &str,
+        x: i32,
+        y: i32,
+        kwin: &KWinBackend,
+    ) -> Result<RaiseWindowAtPointResult> {
+        let windows = kwin.list_windows()?;
+        let Some(topmost_window) = top_window_at_point(&windows, x, y) else {
+            return Ok(RaiseWindowAtPointResult {
+                topmost: None,
+                raised: None,
+                blocked_by: None,
+            });
+        };
+
+        let topmost = app_ref_for_window(topmost_window);
+        if is_shell_window(topmost_window) || is_window_allowed(topmost_window, allowed_bundle_ids, host_bundle_id) {
+            return Ok(RaiseWindowAtPointResult {
+                topmost: Some(topmost),
+                raised: None,
+                blocked_by: None,
+            });
+        }
+
+        let target = windows_at_point_in_z_order(&windows, x, y)
+            .into_iter()
+            .rev()
+            .skip(1)
+            .find(|window| {
+                !is_shell_window(window) && is_window_allowed(window, allowed_bundle_ids, host_bundle_id)
+            });
+
+        let Some(target) = target else {
+            return Ok(RaiseWindowAtPointResult {
+                topmost: Some(topmost.clone()),
+                raised: None,
+                blocked_by: Some(topmost),
+            });
+        };
+
+        kwin.activate_window(&target.id)?;
+
+        Ok(RaiseWindowAtPointResult {
+            topmost: Some(topmost),
+            raised: Some(app_ref_for_window(target)),
+            blocked_by: None,
+        })
+    }
+
+    pub fn prepare_for_action(
+        &self,
+        allowed_bundle_ids: &[String],
+        host_bundle_id: &str,
+        display: Option<&str>,
+        kwin: &KWinBackend,
+    ) -> Result<PrepareActionResult> {
+        self.restore_prepare_state(kwin)?;
+
+        let screens = kwin.list_screens()?;
+        let screen = resolve_optional_screen(&screens, display)?;
+        let windows = kwin.list_windows()?;
+        let activated = active_bundle_id(&windows);
+        let candidates = select_hide_candidates(&windows, screen, allowed_bundle_ids, host_bundle_id);
+        let changed_window_ids = windows_to_change(&candidates, true);
+
+        if !changed_window_ids.is_empty() {
+            kwin.set_exclude_from_capture(&changed_window_ids, true)?;
+            self.state.save(&changed_window_ids)?;
+        } else {
+            self.state.clear()?;
+        }
+
+        Ok(PrepareActionResult {
+            hidden: hidden_bundle_ids(&candidates),
+            activated,
+        })
+    }
+
+    pub fn restore_prepare_state(&self, kwin: &KWinBackend) -> Result<PrepareActionResult> {
+        let managed = self.state.load()?;
+        if managed.is_empty() {
+            return Ok(PrepareActionResult {
+                hidden: Vec::new(),
+                activated: None,
+            });
+        }
+
+        let existing: HashSet<_> = kwin
+            .list_windows()?
+            .into_iter()
+            .map(|window| window.id)
+            .collect();
+        let restorable: Vec<String> = managed
+            .into_iter()
+            .filter(|window_id| existing.contains(window_id))
+            .collect();
+
+        if !restorable.is_empty() {
+            kwin.set_exclude_from_capture(&restorable, false)?;
+        }
+        self.state.clear()?;
+
+        Ok(PrepareActionResult {
+            hidden: Vec::new(),
+            activated: None,
+        })
+    }
+
+    pub async fn resolve_prepare_capture(
+        &self,
+        allowed_bundle_ids: &[String],
+        host_bundle_id: &str,
+        display: Option<&str>,
+        do_hide: bool,
+        capture: &CaptureBackend,
+        portal: &PortalBackend,
+        kwin: &KWinBackend,
+    ) -> Result<ResolvePrepareCaptureResult> {
+        let screens = kwin.list_screens()?;
+        let screen = resolve_screen(&screens, display)?;
+
+        let (hidden, activated, changed_window_ids) = if do_hide {
+            let windows = kwin.list_windows()?;
+            let candidates =
+                select_hide_candidates(&windows, Some(screen), allowed_bundle_ids, host_bundle_id);
+            let hidden = hidden_bundle_ids(&candidates);
+            let activated = active_bundle_id(&windows);
+            let changed_window_ids = windows_to_change(&candidates, true);
+
+            if !changed_window_ids.is_empty() {
+                kwin.set_exclude_from_capture(&changed_window_ids, true)?;
+            }
+
+            (hidden, activated, changed_window_ids)
+        } else {
+            (Vec::new(), None, Vec::new())
+        };
+
+        let capture_result = capture
+            .capture_still_frame(Some(&screen.id), portal, kwin)
+            .await;
+
+        if !changed_window_ids.is_empty() {
+            kwin.set_exclude_from_capture(&changed_window_ids, false)?;
+        }
+
+        match capture_result {
+            Ok(screenshot) => Ok(resolve_capture_success(screenshot, hidden, activated)),
+            Err(error) => Ok(resolve_capture_error(screen, hidden, activated, error)),
+        }
+    }
+}
+
+fn resolve_optional_screen<'a>(
+    screens: &'a [ScreenInfo],
+    selector: Option<&str>,
+) -> Result<Option<&'a ScreenInfo>> {
+    match selector {
+        Some(_) => Ok(Some(resolve_screen(screens, selector)?)),
+        None => Ok(None),
+    }
+}
+
+fn resolve_capture_success(
+    screenshot: ScreenshotResult,
+    hidden: Vec<String>,
+    activated: Option<String>,
+) -> ResolvePrepareCaptureResult {
+    ResolvePrepareCaptureResult {
+        base64: screenshot.base64,
+        width: screenshot.width,
+        height: screenshot.height,
+        display_width: screenshot.display_width,
+        display_height: screenshot.display_height,
+        display_id: screenshot.display_id,
+        origin_x: screenshot.origin_x,
+        origin_y: screenshot.origin_y,
+        hidden,
+        activated,
+        capture_error: None,
+    }
+}
+
+fn resolve_capture_error(
+    screen: &ScreenInfo,
+    hidden: Vec<String>,
+    activated: Option<String>,
+    error: anyhow::Error,
+) -> ResolvePrepareCaptureResult {
+    ResolvePrepareCaptureResult {
+        base64: String::new(),
+        width: 0,
+        height: 0,
+        display_width: screen.geometry.width.max(0) as u32,
+        display_height: screen.geometry.height.max(0) as u32,
+        display_id: screen.id.clone(),
+        origin_x: screen.geometry.x,
+        origin_y: screen.geometry.y,
+        hidden,
+        activated,
+        capture_error: Some(format!("{error:#}")),
+    }
+}
+
+fn select_hide_candidates<'a>(
+    windows: &'a [WindowInfo],
+    screen: Option<&ScreenInfo>,
+    allowed_bundle_ids: &[String],
+    host_bundle_id: &str,
+) -> Vec<&'a WindowInfo> {
+    let mut allowed: HashSet<String> = allowed_bundle_ids.iter().cloned().collect();
+    allowed.insert(host_bundle_id.to_owned());
+
+    windows
+        .iter()
+        .filter(|window| window_matches_screen(window, screen))
+        .filter(|window| !is_shell_window(window))
+        .filter(|window| !is_window_allowed(window, allowed_bundle_ids, host_bundle_id))
+        .collect()
+}
+
+fn to_app_refs(windows: &[&WindowInfo]) -> Vec<AppRef> {
+    let mut seen = HashSet::<String>::new();
+    let mut apps = Vec::new();
+
+    for window in windows {
+        let Some(bundle_id) = bundle_id_for_window(window) else {
+            continue;
+        };
+
+        if seen.insert(bundle_id.clone()) {
+            apps.push(AppRef {
+                bundle_id,
+                display_name: display_name_for_window(window),
+            });
+        }
+    }
+
+    apps
+}
+
+fn windows_to_change(windows: &[&WindowInfo], value: bool) -> Vec<String> {
+    windows
+        .iter()
+        .filter(|window| window.exclude_from_capture != value)
+        .map(|window| window.id.clone())
+        .collect()
+}
+
+fn hidden_bundle_ids(windows: &[&WindowInfo]) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut hidden = Vec::new();
+
+    for window in windows {
+        let Some(bundle_id) = bundle_id_for_window(window) else {
+            continue;
+        };
+
+        if seen.insert(bundle_id.clone()) {
+            hidden.push(bundle_id);
+        }
+    }
+
+    hidden
+}
+
+fn app_ref_for_window(window: &WindowInfo) -> AppRef {
+    AppRef {
+        bundle_id: bundle_id_for_window(window).unwrap_or_else(|| window.id.clone()),
+        display_name: display_name_for_window(window),
+    }
+}
+
+fn active_bundle_id(windows: &[WindowInfo]) -> Option<String> {
+    windows
+        .iter()
+        .find(|window| window.is_active)
+        .and_then(bundle_id_for_window)
+}
+
+fn bundle_id_for_window(window: &WindowInfo) -> Option<String> {
+    for candidate in [
+        window.desktop_file_name.as_deref(),
+        window.resource_class.as_deref(),
+        window.resource_name.as_deref(),
+    ] {
+        let normalized = normalize_bundle_id(candidate);
+        if normalized.is_some() {
+            return normalized;
+        }
+    }
+
+    normalize_bundle_id(Some(&window.id))
+}
+
+fn normalize_bundle_id(value: Option<&str>) -> Option<String> {
+    let value = value?.trim();
+    if value.is_empty() {
+        return None;
+    }
+
+    let normalized = value.strip_suffix(".desktop").unwrap_or(value);
+    Some(normalized.to_owned())
+}
+
+fn display_name_for_window(window: &WindowInfo) -> String {
+    if !window.title.trim().is_empty() {
+        return window.title.clone();
+    }
+
+    bundle_id_for_window(window).unwrap_or_else(|| window.id.clone())
+}
+
+fn is_shell_window(window: &WindowInfo) -> bool {
+    window.is_dock.unwrap_or(false) || window.is_desktop.unwrap_or(false)
+}
+
+fn is_window_allowed(window: &WindowInfo, allowed_bundle_ids: &[String], host_bundle_id: &str) -> bool {
+    let mut allowed: HashSet<String> = allowed_bundle_ids.iter().cloned().collect();
+    allowed.insert(host_bundle_id.to_owned());
+
+    bundle_id_for_window(window)
+        .map(|bundle_id| allowed.contains(&bundle_id))
+        .unwrap_or(false)
+}
+
+fn top_window_at_point(windows: &[WindowInfo], x: i32, y: i32) -> Option<&WindowInfo> {
+    windows_at_point_in_z_order(windows, x, y).into_iter().rev().next()
+}
+
+fn windows_at_point_in_z_order(windows: &[WindowInfo], x: i32, y: i32) -> Vec<&WindowInfo> {
+    let mut hits: Vec<_> = windows
+        .iter()
+        .filter(|window| is_window_visible_for_hit_test(window))
+        .filter(|window| rect_contains_point(&window.geometry, x, y))
+        .collect();
+
+    hits.sort_by_key(|window| window.stacking_order);
+    hits
+}
+
+fn is_window_visible_for_hit_test(window: &WindowInfo) -> bool {
+    if window.is_minimized.unwrap_or(false) {
+        return false;
+    }
+
+    window.is_visible.unwrap_or(true)
+}
+
+fn window_matches_screen(window: &WindowInfo, screen: Option<&ScreenInfo>) -> bool {
+    let Some(screen) = screen else {
+        return true;
+    };
+
+    if let Some(output) = &window.output
+        && output == &screen.id
+    {
+        return true;
+    }
+
+    rects_intersect(
+        window.geometry.x,
+        window.geometry.y,
+        window.geometry.width,
+        window.geometry.height,
+        screen.geometry.x,
+        screen.geometry.y,
+        screen.geometry.width,
+        screen.geometry.height,
+    )
+}
+
+fn rect_contains_point(rect: &crate::model::Rect, x: i32, y: i32) -> bool {
+    rect.width > 0
+        && rect.height > 0
+        && x >= rect.x
+        && x < rect.x.saturating_add(rect.width)
+        && y >= rect.y
+        && y < rect.y.saturating_add(rect.height)
+}
+
+fn rects_intersect(ax: i32, ay: i32, aw: i32, ah: i32, bx: i32, by: i32, bw: i32, bh: i32) -> bool {
+    if aw <= 0 || ah <= 0 || bw <= 0 || bh <= 0 {
+        return false;
+    }
+
+    let a_right = ax.saturating_add(aw);
+    let a_bottom = ay.saturating_add(ah);
+    let b_right = bx.saturating_add(bw);
+    let b_bottom = by.saturating_add(bh);
+
+    ax < b_right && a_right > bx && ay < b_bottom && a_bottom > by
+}
