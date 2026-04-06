@@ -17,17 +17,14 @@ pub enum Command {
     SessionStart,
     /// End the long-lived portal session daemon for this tool-use lock.
     SessionEnd,
-    /// Execute multiple actions sequentially against the active portal session.
-    SessionBatch {
-        #[arg(long)]
-        json: String,
-    },
     /// Show which local desktop integration tools are available.
     Doctor,
     /// Enumerate screens through a KWin script.
     Screens,
     /// Enumerate windows through a KWin script.
     Windows,
+    /// Report the current global cursor position in logical coordinates.
+    CursorPosition,
     /// Set or clear excludeFromCapture for one or more KWin windows.
     SetExclude {
         #[arg(long = "window", required = true)]
@@ -53,6 +50,48 @@ pub enum Command {
         #[arg(long)]
         y: i32,
     },
+    /// Move the pointer to a global logical point.
+    PointerMove {
+        #[arg(long)]
+        x: i32,
+        #[arg(long)]
+        y: i32,
+    },
+    /// Click at a global logical point without executor-side allowlist checks.
+    PointerClick {
+        #[arg(long = "modifier")]
+        modifiers: Vec<String>,
+        #[arg(long)]
+        x: i32,
+        #[arg(long)]
+        y: i32,
+        #[arg(long, default_value = "left")]
+        button: String,
+        #[arg(long, default_value_t = 1)]
+        count: u32,
+    },
+    /// Scroll at a global logical point without executor-side allowlist checks.
+    PointerScroll {
+        #[arg(long)]
+        x: i32,
+        #[arg(long)]
+        y: i32,
+        #[arg(long, default_value_t = 0.0)]
+        dx: f64,
+        #[arg(long, default_value_t = 0.0)]
+        dy: f64,
+    },
+    /// Drag between global logical points without executor-side allowlist checks.
+    PointerDrag {
+        #[arg(long)]
+        from_x: i32,
+        #[arg(long)]
+        from_y: i32,
+        #[arg(long)]
+        to_x: i32,
+        #[arg(long)]
+        to_y: i32,
+    },
     /// Raise the topmost allowed app at a point if a disallowed app is covering it.
     RaiseAllowedAtPoint {
         #[arg(long = "allowed-bundle-id")]
@@ -70,6 +109,8 @@ pub enum Command {
         allowed_bundle_ids: Vec<String>,
         #[arg(long, default_value = "com.anthropic.claude-code.cli-no-window")]
         host_bundle_id: String,
+        #[arg(long = "modifier")]
+        modifiers: Vec<String>,
         #[arg(long)]
         x: i32,
         #[arg(long)]

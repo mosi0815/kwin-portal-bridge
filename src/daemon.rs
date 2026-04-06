@@ -54,6 +54,7 @@ pub enum SessionRequest {
         y: i32,
         button: i32,
         count: u32,
+        keycodes: Vec<i32>,
     },
     ScrollScreenPoint {
         screen: ScreenInfo,
@@ -307,7 +308,12 @@ async fn handle_request(
             y,
             button,
             count,
-        } => respond_async(session.click_screen_point(&screen, x, y, button, count).await),
+            keycodes,
+        } => respond_async(
+            session
+                .click_screen_point(&screen, x, y, button, count, &keycodes)
+                .await,
+        ),
         SessionRequest::ScrollScreenPoint {
             screen,
             x,

@@ -8,7 +8,7 @@ use crate::kwin::KWinBackend;
 use crate::model::{
     AppRef, DragActionResult, KeyboardActionResult, PointerActionResult, PrepareActionResult,
     RaiseWindowAtPointResult, ResolvePrepareCaptureResult, ScreenInfo, ScreenshotResult,
-    SessionBatchAction, SessionBatchRequest, SessionBatchResult, TypeActionResult, WindowInfo,
+    TypeActionResult, WindowInfo,
 };
 use crate::portal::PortalBackend;
 
@@ -106,6 +106,7 @@ impl ExecutorBackend {
         y: i32,
         button: &str,
         count: u32,
+        modifiers: &[String],
         portal: &PortalBackend,
         kwin: &KWinBackend,
     ) -> Result<PointerActionResult> {
@@ -129,8 +130,13 @@ impl ExecutorBackend {
             });
         }
 
+        let keycodes = modifiers
+            .iter()
+            .map(|name| key_name_to_key_code(name))
+            .collect::<Result<Vec<_>>>()?;
+
         portal
-            .click_screen_point(screen, x, y, button_name_to_evdev(button)?, count)
+            .click_screen_point(screen, x, y, button_name_to_evdev(button)?, count, &keycodes)
             .await?;
 
         Ok(PointerActionResult {
@@ -155,6 +161,36 @@ impl ExecutorBackend {
 
         Ok(PointerActionResult {
             action: "mouse-move".to_owned(),
+            x,
+            y,
+            raised: None,
+            blocked_by: None,
+        })
+    }
+
+    pub async fn click_raw(
+        &self,
+        x: i32,
+        y: i32,
+        button: &str,
+        count: u32,
+        modifiers: &[String],
+        portal: &PortalBackend,
+        kwin: &KWinBackend,
+    ) -> Result<PointerActionResult> {
+        let screens = kwin.list_screens()?;
+        let screen = screen_at_point(&screens, x, y)?;
+        let keycodes = modifiers
+            .iter()
+            .map(|name| key_name_to_key_code(name))
+            .collect::<Result<Vec<_>>>()?;
+
+        portal
+            .click_screen_point(screen, x, y, button_name_to_evdev(button)?, count, &keycodes)
+            .await?;
+
+        Ok(PointerActionResult {
+            action: "click".to_owned(),
             x,
             y,
             raised: None,
@@ -200,6 +236,28 @@ impl ExecutorBackend {
             x,
             y,
             raised: raise.raised,
+            blocked_by: None,
+        })
+    }
+
+    pub async fn scroll_raw(
+        &self,
+        x: i32,
+        y: i32,
+        dx: f64,
+        dy: f64,
+        portal: &PortalBackend,
+        kwin: &KWinBackend,
+    ) -> Result<PointerActionResult> {
+        let screens = kwin.list_screens()?;
+        let screen = screen_at_point(&screens, x, y)?;
+        portal.scroll_screen_point(screen, x, y, dx, dy).await?;
+
+        Ok(PointerActionResult {
+            action: "scroll".to_owned(),
+            x,
+            y,
+            raised: None,
             blocked_by: None,
         })
     }
@@ -309,6 +367,34 @@ impl ExecutorBackend {
         })
     }
 
+    pub async fn drag_raw(
+        &self,
+        from_x: i32,
+        from_y: i32,
+        to_x: i32,
+        to_y: i32,
+        portal: &PortalBackend,
+        kwin: &KWinBackend,
+    ) -> Result<DragActionResult> {
+        let screens = kwin.list_screens()?;
+        let from_screen = screen_at_point(&screens, from_x, from_y)?;
+        let to_screen = screen_at_point(&screens, to_x, to_y)?;
+
+        portal
+            .drag_screen_points(from_screen, from_x, from_y, to_screen, to_x, to_y)
+            .await?;
+
+        Ok(DragActionResult {
+            action: "drag".to_owned(),
+            from_x,
+            from_y,
+            to_x,
+            to_y,
+            raised: None,
+            blocked_by: None,
+        })
+    }
+
     pub fn prepare_for_action(
         &self,
         allowed_bundle_ids: &[String],
@@ -412,117 +498,6 @@ impl ExecutorBackend {
         }
     }
 
-    pub async fn session_batch(
-        &self,
-        batch: SessionBatchRequest,
-        capture: &CaptureBackend,
-        portal: &PortalBackend,
-        kwin: &KWinBackend,
-    ) -> Result<SessionBatchResult> {
-        let mut results = Vec::with_capacity(batch.actions.len());
-
-        for action in batch.actions {
-            let value = match action {
-                SessionBatchAction::Wait { duration_ms } => {
-                    tokio::time::sleep(std::time::Duration::from_millis(duration_ms)).await;
-                    serde_json::json!({
-                        "action": "wait",
-                        "durationMs": duration_ms,
-                    })
-                }
-                SessionBatchAction::MouseMove { x, y } => {
-                    serde_json::to_value(self.move_pointer(x, y, portal, kwin).await?)?
-                }
-                SessionBatchAction::Click {
-                    x,
-                    y,
-                    button,
-                    count,
-                    allowed_bundle_ids,
-                    host_bundle_id,
-                } => serde_json::to_value(
-                    self.click(
-                        &allowed_bundle_ids,
-                        &host_bundle_id,
-                        x,
-                        y,
-                        &button,
-                        count,
-                        portal,
-                        kwin,
-                    )
-                    .await?,
-                )?,
-                SessionBatchAction::Scroll {
-                    x,
-                    y,
-                    dx,
-                    dy,
-                    allowed_bundle_ids,
-                    host_bundle_id,
-                } => serde_json::to_value(
-                    self.scroll(
-                        &allowed_bundle_ids,
-                        &host_bundle_id,
-                        x,
-                        y,
-                        dx,
-                        dy,
-                        portal,
-                        kwin,
-                    )
-                    .await?,
-                )?,
-                SessionBatchAction::Key { keys, repeat } => {
-                    serde_json::to_value(self.key_sequence(&keys, repeat, portal).await?)?
-                }
-                SessionBatchAction::Type { text } => {
-                    serde_json::to_value(self.type_text(&text, portal).await?)?
-                }
-                SessionBatchAction::HoldKey { keys, duration_ms } => {
-                    serde_json::to_value(self.hold_keys(&keys, duration_ms, portal).await?)?
-                }
-                SessionBatchAction::Drag {
-                    from_x,
-                    from_y,
-                    to_x,
-                    to_y,
-                    allowed_bundle_ids,
-                    host_bundle_id,
-                } => serde_json::to_value(
-                    self.drag(
-                        &allowed_bundle_ids,
-                        &host_bundle_id,
-                        from_x,
-                        from_y,
-                        to_x,
-                        to_y,
-                        portal,
-                        kwin,
-                    )
-                    .await?,
-                )?,
-                SessionBatchAction::LeftMouseDown => {
-                    serde_json::to_value(portal.left_mouse_down().await?)?
-                }
-                SessionBatchAction::LeftMouseUp => serde_json::to_value(portal.left_mouse_up().await?)?,
-                SessionBatchAction::Screenshot { display } => serde_json::to_value(
-                    capture
-                        .capture_still_frame(display.as_deref(), portal, kwin)
-                        .await?,
-                )?,
-                SessionBatchAction::Zoom { display, x, y, w, h } => serde_json::to_value(
-                    capture
-                        .capture_zoom(display.as_deref(), x, y, w, h, portal, kwin)
-                        .await?,
-                )?,
-            };
-
-            results.push(value);
-        }
-
-        Ok(SessionBatchResult { results })
-    }
 }
 
 fn resolve_optional_screen<'a>(

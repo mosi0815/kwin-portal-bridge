@@ -19,7 +19,6 @@ use crate::daemon::{serve_session_daemon, start_session_daemon, stop_session_dae
 use crate::executor::ExecutorBackend;
 use crate::json::print_json;
 use crate::kwin::KWinBackend;
-use crate::model::SessionBatchRequest;
 use crate::portal::PortalBackend;
 
 #[tokio::main]
@@ -42,10 +41,6 @@ async fn main() -> Result<()> {
             stop_session_daemon().await?;
             print_json(&serde_json::json!({ "ended": true }))?;
         }
-        Command::SessionBatch { json } => {
-            let batch: SessionBatchRequest = serde_json::from_str(&json)?;
-            print_json(&executor.session_batch(batch, &capture, &portal, &kwin).await?)?;
-        }
         Command::Doctor => {
             print_json(&kwin.doctor()?)?;
         }
@@ -54,6 +49,9 @@ async fn main() -> Result<()> {
         }
         Command::Windows => {
             print_json(&kwin.list_windows()?)?;
+        }
+        Command::CursorPosition => {
+            print_json(&kwin.cursor_position()?)?;
         }
         Command::SetExclude { windows, value } => {
             print_json(&kwin.set_exclude_from_capture(&windows, value)?)?;
@@ -76,6 +74,37 @@ async fn main() -> Result<()> {
         Command::AppUnderPoint { x, y } => {
             print_json(&executor.app_under_point(x, y, &kwin)?)?;
         }
+        Command::PointerMove { x, y } => {
+            print_json(&executor.move_pointer(x, y, &portal, &kwin).await?)?;
+        }
+        Command::PointerClick {
+            modifiers,
+            x,
+            y,
+            button,
+            count,
+        } => {
+            print_json(
+                &executor
+                    .click_raw(x, y, &button, count, &modifiers, &portal, &kwin)
+                    .await?,
+            )?;
+        }
+        Command::PointerScroll { x, y, dx, dy } => {
+            print_json(&executor.scroll_raw(x, y, dx, dy, &portal, &kwin).await?)?;
+        }
+        Command::PointerDrag {
+            from_x,
+            from_y,
+            to_x,
+            to_y,
+        } => {
+            print_json(
+                &executor
+                    .drag_raw(from_x, from_y, to_x, to_y, &portal, &kwin)
+                    .await?,
+            )?;
+        }
         Command::RaiseAllowedAtPoint {
             allowed_bundle_ids,
             host_bundle_id,
@@ -93,6 +122,7 @@ async fn main() -> Result<()> {
         Command::Click {
             allowed_bundle_ids,
             host_bundle_id,
+            modifiers,
             x,
             y,
             button,
@@ -107,6 +137,7 @@ async fn main() -> Result<()> {
                         y,
                         &button,
                         count,
+                        &modifiers,
                         &portal,
                         &kwin,
                     )

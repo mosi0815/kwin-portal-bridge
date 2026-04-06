@@ -86,6 +86,7 @@ impl PortalBackend {
         y: i32,
         button: i32,
         count: u32,
+        keycodes: &[i32],
     ) -> Result<PortalActionResult> {
         request(SessionRequest::ClickScreenPoint {
             screen: screen.clone(),
@@ -93,6 +94,7 @@ impl PortalBackend {
             y,
             button,
             count,
+            keycodes: keycodes.to_vec(),
         })
         .await
     }
@@ -451,6 +453,7 @@ impl LivePortalSession {
         y: i32,
         button: i32,
         count: u32,
+        keycodes: &[i32],
     ) -> Result<PortalActionResult> {
         if self.held_buttons.contains(&button) {
             bail!("button {button} is currently held by the session");
@@ -471,18 +474,29 @@ impl LivePortalSession {
             .await
             .context("failed to move pointer before click")?;
 
-        for _ in 0..count.max(1) {
-            self.manager
-                .remote_desktop()
-                .notify_pointer_button(self.session.ashpd_session(), button, true)
-                .await
-                .context("failed to send pointer press through the portal")?;
-            self.manager
-                .remote_desktop()
-                .notify_pointer_button(self.session.ashpd_session(), button, false)
-                .await
-                .context("failed to send pointer release through the portal")?;
+        self.press_keycodes(keycodes).await?;
+
+        let click_result = async {
+            for _ in 0..count.max(1) {
+                self.manager
+                    .remote_desktop()
+                    .notify_pointer_button(self.session.ashpd_session(), button, true)
+                    .await
+                    .context("failed to send pointer press through the portal")?;
+                self.manager
+                    .remote_desktop()
+                    .notify_pointer_button(self.session.ashpd_session(), button, false)
+                    .await
+                    .context("failed to send pointer release through the portal")?;
+            }
+
+            Ok::<(), anyhow::Error>(())
         }
+        .await;
+
+        let release_result = self.release_keycodes(keycodes).await;
+        click_result?;
+        release_result?;
 
         Ok(PortalActionResult {
             action: "click".to_owned(),
@@ -641,6 +655,32 @@ impl LivePortalSession {
             text: text.to_owned(),
             char_count: text.chars().count(),
         })
+    }
+
+    async fn press_keycodes(&self, keycodes: &[i32]) -> Result<()> {
+        for &keycode in keycodes {
+            self.manager
+                .remote_desktop()
+                .notify_keyboard_keycode(self.session.ashpd_session(), keycode, true)
+                .await
+                .with_context(|| format!("failed to press keycode {keycode} through the portal"))?;
+        }
+
+        Ok(())
+    }
+
+    async fn release_keycodes(&self, keycodes: &[i32]) -> Result<()> {
+        for &keycode in keycodes.iter().rev() {
+            self.manager
+                .remote_desktop()
+                .notify_keyboard_keycode(self.session.ashpd_session(), keycode, false)
+                .await
+                .with_context(|| {
+                    format!("failed to release keycode {keycode} through the portal")
+                })?;
+        }
+
+        Ok(())
     }
 
     pub async fn drag_screen_points(

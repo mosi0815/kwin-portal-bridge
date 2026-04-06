@@ -10,9 +10,11 @@ use dbus::channel::MatchingReceiver;
 use dbus::message::MatchRule;
 use serde::de::DeserializeOwned;
 
-use crate::model::{DoctorReport, ExcludeUpdate, ScreenInfo, ToolPresence, WindowInfo};
+use crate::model::{CursorPosition, DoctorReport, ExcludeUpdate, ScreenInfo, ToolPresence, WindowInfo};
 
 const DBUS_TIMEOUT: Duration = Duration::from_secs(5);
+const SCRIPT_OUTPUT_POLL_INTERVAL: Duration = Duration::from_millis(250);
+const SCRIPT_OUTPUT_MAX_POLLS: usize = 20;
 const BRIDGE_PATH: &str = "/Bridge";
 const BRIDGE_INTERFACE: &str = "org.kde.KWinPortalBridge";
 
@@ -39,6 +41,11 @@ impl KWinBackend {
 
     pub fn list_windows(&self) -> Result<Vec<WindowInfo>> {
         let payload = run_json_script("kwin-portal-bridge-windows", SCRIPTS.windows)?;
+        parse_payload(payload)
+    }
+
+    pub fn cursor_position(&self) -> Result<CursorPosition> {
+        let payload = run_json_script("kwin-portal-bridge-cursor", SCRIPTS.cursor)?;
         parse_payload(payload)
     }
 
@@ -175,10 +182,14 @@ fn run_script(script_name: &str, script_body: &str, require_result: bool) -> Res
         .method_call("org.kde.kwin.Script", "run", ())
         .context("failed to run the KWin script")?;
 
-    for _ in 0..20 {
+    for _ in 0..SCRIPT_OUTPUT_MAX_POLLS {
         receiver_conn
-            .process(Duration::from_millis(250))
+            .process(SCRIPT_OUTPUT_POLL_INTERVAL)
             .context("failed while waiting for KWin script output")?;
+
+        if messages_include_terminal_event(&messages)? {
+            break;
+        }
     }
 
     if let Err(error) = script_proxy.method_call::<(), _, _, _>("org.kde.kwin.Script", "stop", ()) {
@@ -206,6 +217,16 @@ fn run_script(script_name: &str, script_body: &str, require_result: bool) -> Res
     }
 
     Ok(payload)
+}
+
+fn messages_include_terminal_event(messages: &Arc<Mutex<Vec<(String, String)>>>) -> Result<bool> {
+    let received = messages
+        .lock()
+        .map_err(|_| anyhow!("message receiver lock poisoned"))?;
+
+    Ok(received
+        .iter()
+        .any(|(kind, _)| matches!(kind.as_str(), "result" | "error")))
 }
 
 fn unique_suffix() -> u128 {
@@ -253,11 +274,13 @@ function bridgeError(message) {
 struct Scripts<'a> {
     screens: &'a str,
     windows: &'a str,
+    cursor: &'a str,
 }
 
 const SCRIPTS: Scripts<'static> = Scripts {
     screens: SCRIPT_SCREENS,
     windows: SCRIPT_WINDOWS,
+    cursor: SCRIPT_CURSOR,
 };
 
 const SCRIPT_SCREENS: &str = r#"
@@ -306,6 +329,23 @@ try {
 }
 "#;
 
+const SCRIPT_CURSOR: &str = r#"
+try {
+    const pos =
+        (typeof workspace.cursorPos === "object" && workspace.cursorPos) ||
+        (typeof workspace.cursorPosition === "object" && workspace.cursorPosition);
+    if (!pos) {
+        throw new Error("KWin did not expose workspace.cursorPos");
+    }
+    bridgeResult({
+        x: Math.round(pos.x),
+        y: Math.round(pos.y)
+    });
+} catch (error) {
+    bridgeError(String(error));
+}
+"#;
+
 const SCRIPT_SET_EXCLUDE: &str = r#"
 try {
     const changed = [];
@@ -339,6 +379,7 @@ try {
     }
 
     workspace.activeWindow = target;
+    bridgeResult({ activated: TARGET_WINDOW });
 } catch (error) {
     bridgeError(String(error));
 }

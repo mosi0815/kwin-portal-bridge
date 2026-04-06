@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Rect {
@@ -7,6 +6,12 @@ pub struct Rect {
     pub y: i32,
     pub width: i32,
     pub height: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CursorPosition {
+    pub x: i32,
+    pub y: i32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -256,99 +261,4 @@ pub struct CapturedFrame {
     pub target_stream: StreamSelection,
     pub frame: lamco_pipewire::VideoFrame,
     pub frame_byte_len: usize,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "action", rename_all = "snake_case")]
-pub enum SessionBatchAction {
-    Wait {
-        duration_ms: u64,
-    },
-    MouseMove {
-        x: i32,
-        y: i32,
-    },
-    Click {
-        x: i32,
-        y: i32,
-        #[serde(default = "default_left_button")]
-        button: String,
-        #[serde(default = "default_click_count")]
-        count: u32,
-        #[serde(default)]
-        allowed_bundle_ids: Vec<String>,
-        #[serde(default = "default_host_bundle_id")]
-        host_bundle_id: String,
-    },
-    Scroll {
-        x: i32,
-        y: i32,
-        #[serde(default)]
-        dx: f64,
-        #[serde(default)]
-        dy: f64,
-        #[serde(default)]
-        allowed_bundle_ids: Vec<String>,
-        #[serde(default = "default_host_bundle_id")]
-        host_bundle_id: String,
-    },
-    Key {
-        keys: String,
-        #[serde(default)]
-        repeat: Option<u32>,
-    },
-    Type {
-        text: String,
-    },
-    HoldKey {
-        keys: Vec<String>,
-        duration_ms: u64,
-    },
-    Drag {
-        from_x: i32,
-        from_y: i32,
-        to_x: i32,
-        to_y: i32,
-        #[serde(default)]
-        allowed_bundle_ids: Vec<String>,
-        #[serde(default = "default_host_bundle_id")]
-        host_bundle_id: String,
-    },
-    LeftMouseDown,
-    LeftMouseUp,
-    Screenshot {
-        #[serde(default)]
-        display: Option<String>,
-    },
-    Zoom {
-        #[serde(default)]
-        display: Option<String>,
-        x: i32,
-        y: i32,
-        w: i32,
-        h: i32,
-    },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionBatchRequest {
-    pub actions: Vec<SessionBatchAction>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SessionBatchResult {
-    pub results: Vec<Value>,
-}
-
-fn default_left_button() -> String {
-    "left".to_owned()
-}
-
-fn default_click_count() -> u32 {
-    1
-}
-
-fn default_host_bundle_id() -> String {
-    "com.anthropic.claude-code.cli-no-window".to_owned()
 }
