@@ -33,13 +33,17 @@ impl ExecutorBackend {
         let screens = kwin.list_screens()?;
         let screen = resolve_optional_screen(&screens, display)?;
         let windows = kwin.list_windows()?;
-        let candidates = select_hide_candidates(&windows, screen, allowed_bundle_ids, host_bundle_id);
+        let candidates =
+            select_hide_candidates(&windows, screen, allowed_bundle_ids, host_bundle_id);
         Ok(to_app_refs(&candidates))
     }
 
     pub fn frontmost_app(&self, kwin: &KWinBackend) -> Result<Option<AppRef>> {
         let windows = kwin.list_windows()?;
-        Ok(windows.iter().find(|window| window.is_active).map(app_ref_for_window))
+        Ok(windows
+            .iter()
+            .find(|window| window.is_active)
+            .map(app_ref_for_window))
     }
 
     pub fn app_under_point(&self, x: i32, y: i32, kwin: &KWinBackend) -> Result<Option<AppRef>> {
@@ -65,7 +69,9 @@ impl ExecutorBackend {
         };
 
         let topmost = app_ref_for_window(topmost_window);
-        if is_shell_window(topmost_window) || is_window_allowed(topmost_window, allowed_bundle_ids, host_bundle_id) {
+        if is_shell_window(topmost_window)
+            || is_window_allowed(topmost_window, allowed_bundle_ids, host_bundle_id)
+        {
             return Ok(RaiseWindowAtPointResult {
                 topmost: Some(topmost),
                 raised: None,
@@ -78,7 +84,8 @@ impl ExecutorBackend {
             .rev()
             .skip(1)
             .find(|window| {
-                !is_shell_window(window) && is_window_allowed(window, allowed_bundle_ids, host_bundle_id)
+                !is_shell_window(window)
+                    && is_window_allowed(window, allowed_bundle_ids, host_bundle_id)
             });
 
         let Some(target) = target else {
@@ -112,13 +119,8 @@ impl ExecutorBackend {
     ) -> Result<PointerActionResult> {
         let screens = kwin.list_screens()?;
         let screen = screen_at_point(&screens, x, y)?;
-        let raise = self.raise_allowed_window_at_point(
-            allowed_bundle_ids,
-            host_bundle_id,
-            x,
-            y,
-            kwin,
-        )?;
+        let raise =
+            self.raise_allowed_window_at_point(allowed_bundle_ids, host_bundle_id, x, y, kwin)?;
 
         if let Some(blocked_by) = raise.blocked_by {
             return Ok(PointerActionResult {
@@ -136,7 +138,14 @@ impl ExecutorBackend {
             .collect::<Result<Vec<_>>>()?;
 
         portal
-            .click_screen_point(screen, x, y, button_name_to_evdev(button)?, count, &keycodes)
+            .click_screen_point(
+                screen,
+                x,
+                y,
+                button_name_to_evdev(button)?,
+                count,
+                &keycodes,
+            )
             .await?;
 
         Ok(PointerActionResult {
@@ -186,7 +195,14 @@ impl ExecutorBackend {
             .collect::<Result<Vec<_>>>()?;
 
         portal
-            .click_screen_point(screen, x, y, button_name_to_evdev(button)?, count, &keycodes)
+            .click_screen_point(
+                screen,
+                x,
+                y,
+                button_name_to_evdev(button)?,
+                count,
+                &keycodes,
+            )
             .await?;
 
         Ok(PointerActionResult {
@@ -211,13 +227,8 @@ impl ExecutorBackend {
     ) -> Result<PointerActionResult> {
         let screens = kwin.list_screens()?;
         let screen = screen_at_point(&screens, x, y)?;
-        let raise = self.raise_allowed_window_at_point(
-            allowed_bundle_ids,
-            host_bundle_id,
-            x,
-            y,
-            kwin,
-        )?;
+        let raise =
+            self.raise_allowed_window_at_point(allowed_bundle_ids, host_bundle_id, x, y, kwin)?;
 
         if let Some(blocked_by) = raise.blocked_by {
             return Ok(PointerActionResult {
@@ -310,11 +321,7 @@ impl ExecutorBackend {
         })
     }
 
-    pub async fn type_text(
-        &self,
-        text: &str,
-        portal: &PortalBackend,
-    ) -> Result<TypeActionResult> {
+    pub async fn type_text(&self, text: &str, portal: &PortalBackend) -> Result<TypeActionResult> {
         portal.type_text(text).await
     }
 
@@ -497,7 +504,6 @@ impl ExecutorBackend {
             Err(error) => Ok(resolve_capture_error(screen, hidden, activated, error)),
         }
     }
-
 }
 
 fn resolve_optional_screen<'a>(
@@ -765,7 +771,11 @@ fn is_shell_window(window: &WindowInfo) -> bool {
     window.is_dock.unwrap_or(false) || window.is_desktop.unwrap_or(false)
 }
 
-fn is_window_allowed(window: &WindowInfo, allowed_bundle_ids: &[String], host_bundle_id: &str) -> bool {
+fn is_window_allowed(
+    window: &WindowInfo,
+    allowed_bundle_ids: &[String],
+    host_bundle_id: &str,
+) -> bool {
     let mut allowed: HashSet<String> = allowed_bundle_ids.iter().cloned().collect();
     allowed.insert(host_bundle_id.to_owned());
 
@@ -775,7 +785,10 @@ fn is_window_allowed(window: &WindowInfo, allowed_bundle_ids: &[String], host_bu
 }
 
 fn top_window_at_point(windows: &[WindowInfo], x: i32, y: i32) -> Option<&WindowInfo> {
-    windows_at_point_in_z_order(windows, x, y).into_iter().rev().next()
+    windows_at_point_in_z_order(windows, x, y)
+        .into_iter()
+        .rev()
+        .next()
 }
 
 fn windows_at_point_in_z_order(windows: &[WindowInfo], x: i32, y: i32) -> Vec<&WindowInfo> {

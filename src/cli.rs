@@ -14,7 +14,10 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Start a long-lived portal session daemon for this tool-use lock.
-    SessionStart,
+    SessionStart {
+        #[arg(long, default_value_t = false)]
+        foreground: bool,
+    },
     /// End the long-lived portal session daemon for this tool-use lock.
     SessionEnd,
     /// Show which local desktop integration tools are available.
@@ -40,6 +43,18 @@ pub enum Command {
         host_bundle_id: String,
         #[arg(long)]
         display: Option<String>,
+    },
+    /// Enumerate launchable desktop applications from installed desktop entries.
+    ListInstalledApps,
+    /// Resolve a desktop-entry icon and return it as a data URL.
+    GetAppIcon {
+        #[arg(long)]
+        target: String,
+    },
+    /// Launch an installed desktop application by bundle id, desktop id, name, or path.
+    OpenApp {
+        #[arg(long)]
+        app: String,
     },
     /// Report the currently active app.
     FrontmostApp,

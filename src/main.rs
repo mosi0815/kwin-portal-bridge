@@ -1,6 +1,7 @@
 mod capture;
 mod cli;
 mod daemon;
+mod desktop_apps;
 mod exclude_state;
 mod executor;
 mod json;
@@ -15,7 +16,11 @@ use tracing_subscriber::EnvFilter;
 
 use crate::capture::CaptureBackend;
 use crate::cli::{Cli, Command};
-use crate::daemon::{serve_session_daemon, start_session_daemon, stop_session_daemon};
+use crate::daemon::{
+    open_session_daemon, prepare_session_socket, serve_open_session, serve_session_daemon,
+    start_session_daemon, stop_session_daemon,
+};
+use crate::desktop_apps::DesktopAppService;
 use crate::executor::ExecutorBackend;
 use crate::json::print_json;
 use crate::kwin::KWinBackend;
@@ -30,12 +35,20 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     let kwin = KWinBackend::new();
     let capture = CaptureBackend::new();
+    let desktop_apps = DesktopAppService::new();
     let executor = ExecutorBackend::new()?;
     let portal = PortalBackend::new();
 
     match cli.command {
-        Command::SessionStart => {
-            print_json(&start_session_daemon().await?)?;
+        Command::SessionStart { foreground } => {
+            if foreground {
+                let socket = prepare_session_socket().await?;
+                let (listener, session) = open_session_daemon(&socket).await?;
+                print_json(&session.info())?;
+                serve_open_session(socket, listener, session).await?;
+            } else {
+                print_json(&start_session_daemon().await?)?;
+            }
         }
         Command::SessionEnd => {
             stop_session_daemon().await?;
@@ -67,6 +80,15 @@ async fn main() -> Result<()> {
                 display.as_deref(),
                 &kwin,
             )?)?;
+        }
+        Command::ListInstalledApps => {
+            print_json(&desktop_apps.list_installed_apps()?)?;
+        }
+        Command::GetAppIcon { target } => {
+            print_json(&desktop_apps.get_app_icon(&target)?)?;
+        }
+        Command::OpenApp { app } => {
+            print_json(&desktop_apps.open_app(&app)?)?;
         }
         Command::FrontmostApp => {
             print_json(&executor.frontmost_app(&kwin)?)?;
@@ -253,7 +275,13 @@ async fn main() -> Result<()> {
                     .await?,
             )?;
         }
-        Command::Zoom { display, x, y, w, h } => {
+        Command::Zoom {
+            display,
+            x,
+            y,
+            w,
+            h,
+        } => {
             print_json(
                 &capture
                     .capture_zoom(display.as_deref(), x, y, w, h, &portal, &kwin)

@@ -10,7 +10,9 @@ use dbus::channel::MatchingReceiver;
 use dbus::message::MatchRule;
 use serde::de::DeserializeOwned;
 
-use crate::model::{CursorPosition, DoctorReport, ExcludeUpdate, ScreenInfo, ToolPresence, WindowInfo};
+use crate::model::{
+    CursorPosition, DoctorReport, ExcludeUpdate, ScreenInfo, ToolPresence, WindowInfo,
+};
 
 const DBUS_TIMEOUT: Duration = Duration::from_secs(5);
 const SCRIPT_OUTPUT_POLL_INTERVAL: Duration = Duration::from_millis(250);
@@ -130,7 +132,11 @@ fn run_json_script(script_name: &str, script_body: &str) -> Result<String> {
     payload.ok_or_else(|| anyhow!("KWin script finished without a result payload"))
 }
 
-fn run_script(script_name: &str, script_body: &str, require_result: bool) -> Result<Option<String>> {
+fn run_script(
+    script_name: &str,
+    script_body: &str,
+    require_result: bool,
+) -> Result<Option<String>> {
     let kwin_conn =
         Connection::new_session().context("failed to connect to the session bus for KWin")?;
     let kwin_proxy = kwin_conn.with_proxy("org.kde.KWin", "/Scripting", DBUS_TIMEOUT);
@@ -285,6 +291,54 @@ const SCRIPTS: Scripts<'static> = Scripts {
 
 const SCRIPT_SCREENS: &str = r#"
 try {
+    function toArray(value) {
+        if (!value) {
+            return [];
+        }
+
+        if (Array.isArray(value)) {
+            return value;
+        }
+
+        if (typeof value.length === "number") {
+            try {
+                return Array.from(value);
+            } catch (_error) {
+                const items = [];
+                for (let i = 0; i < value.length; i++) {
+                    items.push(value[i]);
+                }
+                return items;
+            }
+        }
+
+        return [];
+    }
+
+    function sameScreen(a, b) {
+        if (!a || !b) {
+            return false;
+        }
+
+        if (a === b) {
+            return true;
+        }
+
+        if (a.name && b.name && a.name === b.name) {
+            return true;
+        }
+
+        const ag = a.geometry;
+        const bg = b.geometry;
+        return !!ag && !!bg &&
+            ag.x === bg.x &&
+            ag.y === bg.y &&
+            ag.width === bg.width &&
+            ag.height === bg.height;
+    }
+
+    const orderedScreens = toArray(workspace.screenOrder);
+    const primaryScreen = orderedScreens.length > 0 ? orderedScreens[0] : null;
     const screens = workspace.screens.map((screen, index) => ({
         id: screen.name || `screen-${index}`,
         name: screen.name || `Screen ${index + 1}`,
@@ -292,7 +346,7 @@ try {
         scale: typeof screen.devicePixelRatio === "number" ? screen.devicePixelRatio : screen.scale,
         refresh_millihz: screen.refreshRate,
         is_active: workspace.activeScreen === screen,
-        is_primary: index === 0
+        is_primary: primaryScreen ? sameScreen(primaryScreen, screen) : index === 0
     }));
     bridgeResult(screens);
 } catch (error) {

@@ -3,15 +3,19 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
-use serde::{Deserialize, Serialize};
 use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
-use wl_clipboard_rs::copy::{MimeType as CopyMimeType, Options as CopyOptions, Source as CopySource};
+use wl_clipboard_rs::copy::{
+    MimeType as CopyMimeType, Options as CopyOptions, Source as CopySource,
+};
 use wl_clipboard_rs::paste::{ClipboardType, MimeType as PasteMimeType, Seat, get_contents};
 
 use crate::capture::{screenshot_result_from_frame, zoom_result_from_frame};
+use crate::executor::ExecutorBackend;
+use crate::kwin::KWinBackend;
 use crate::model::{
     ClipboardReadResult, ClipboardWriteResult, PortalSessionInfo, ScreenInfo, ScreenshotCapture,
     ScreenshotResult,
@@ -20,6 +24,8 @@ use crate::portal::LivePortalSession;
 
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
+#[cfg(unix)]
+use tokio::signal::unix::{SignalKind, signal};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SessionRequest {
@@ -109,8 +115,7 @@ pub async fn start_session_daemon() -> Result<PortalSessionInfo> {
         bail!("a portal session is already active: {}", info.session_id);
     }
 
-    let socket = socket_path()?;
-    cleanup_stale_socket(&socket).await?;
+    let socket = prepare_session_socket().await?;
 
     let current_exe = std::env::current_exe().context("failed to resolve current executable")?;
     let mut command = Command::new(current_exe);
@@ -132,9 +137,7 @@ pub async fn start_session_daemon() -> Result<PortalSessionInfo> {
         });
     }
 
-    command
-        .spawn()
-        .context("failed to spawn session daemon")?;
+    command.spawn().context("failed to spawn session daemon")?;
 
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
@@ -155,36 +158,88 @@ pub async fn stop_session_daemon() -> Result<()> {
     Ok(())
 }
 
-pub async fn serve_session_daemon(socket: PathBuf) -> Result<()> {
+pub async fn prepare_session_socket() -> Result<PathBuf> {
+    if let Ok(info) = request::<PortalSessionInfo>(SessionRequest::SessionInfo).await {
+        bail!("a portal session is already active: {}", info.session_id);
+    }
+
+    let socket = socket_path()?;
+    cleanup_stale_socket(&socket).await?;
+    Ok(socket)
+}
+
+pub async fn open_session_daemon(socket: &Path) -> Result<(UnixListener, LivePortalSession)> {
     if socket.exists() {
-        std::fs::remove_file(&socket).with_context(|| {
-            format!("failed to remove stale session socket `{}`", socket.display())
+        std::fs::remove_file(socket).with_context(|| {
+            format!(
+                "failed to remove stale session socket `{}`",
+                socket.display()
+            )
         })?;
     }
     if let Some(parent) = socket.parent() {
         std::fs::create_dir_all(parent).with_context(|| {
-            format!("failed to create session socket directory `{}`", parent.display())
+            format!(
+                "failed to create session socket directory `{}`",
+                parent.display()
+            )
         })?;
     }
 
-    let listener = UnixListener::bind(&socket)
+    let listener = UnixListener::bind(socket)
         .with_context(|| format!("failed to bind session socket `{}`", socket.display()))?;
-    let mut session = LivePortalSession::open().await?;
+    let session = LivePortalSession::open().await?;
+    Ok((listener, session))
+}
 
+pub async fn serve_session_daemon(socket: PathBuf) -> Result<()> {
+    let (listener, session) = open_session_daemon(&socket).await?;
+    serve_open_session(socket, listener, session).await
+}
+
+pub async fn serve_open_session(
+    socket: PathBuf,
+    listener: UnixListener,
+    mut session: LivePortalSession,
+) -> Result<()> {
     let serve_result = async {
+        let mut capture_drain_tick = tokio::time::interval(Duration::from_millis(100));
+        capture_drain_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        #[cfg(unix)]
+        let mut terminate_signal =
+            signal(SignalKind::terminate()).context("failed to register SIGTERM handler")?;
+        #[cfg(unix)]
+        let terminate = async {
+            terminate_signal.recv().await;
+        };
+        #[cfg(not(unix))]
+        let terminate = std::future::pending::<()>();
+        tokio::pin!(terminate);
+
         loop {
-            let (mut stream, _) = listener.accept().await.context("failed to accept IPC client")?;
-            let request = read_request(&mut stream).await?;
-            let (response, should_shutdown) = handle_request(&mut session, request).await;
-            write_response(&mut stream, response).await?;
-            if should_shutdown {
-                break;
+            tokio::select! {
+                _ = capture_drain_tick.tick() => {
+                    session.drain_capture_backlog();
+                }
+                _ = &mut terminate => {
+                    break;
+                }
+                accepted = listener.accept() => {
+                    let (mut stream, _) = accepted.context("failed to accept IPC client")?;
+                    let request = read_request(&mut stream).await?;
+                    let (response, should_shutdown) = handle_request(&mut session, request).await;
+                    write_response(&mut stream, response).await?;
+                    if should_shutdown {
+                        break;
+                    }
+                }
             }
         }
         Ok::<(), anyhow::Error>(())
     }
     .await;
 
+    restore_prepare_state().ok();
     session.shutdown().await.ok();
     std::fs::remove_file(&socket).ok();
     serve_result
@@ -246,7 +301,10 @@ async fn cleanup_stale_socket(socket: &Path) -> Result<()> {
         Ok(_) => {}
         Err(_) => {
             std::fs::remove_file(socket).with_context(|| {
-                format!("failed to remove stale session socket `{}`", socket.display())
+                format!(
+                    "failed to remove stale session socket `{}`",
+                    socket.display()
+                )
             })?;
         }
     }
@@ -335,13 +393,11 @@ async fn handle_request(
             to_screen,
             to_x,
             to_y,
-        } => {
-            respond_async(
-                session
-                    .drag_screen_points(&from_screen, from_x, from_y, &to_screen, to_x, to_y)
-                    .await,
-            )
-        }
+        } => respond_async(
+            session
+                .drag_screen_points(&from_screen, from_x, from_y, &to_screen, to_x, to_y)
+                .await,
+        ),
         SessionRequest::CaptureStillFrame { screen } => {
             respond_async(capture_still(session, &screen).await)
         }
@@ -388,6 +444,15 @@ fn respond_ok<T: Serialize>(value: T) -> SessionResponse {
             error: Some(format!("failed to serialize session response: {error}")),
         },
     }
+}
+
+fn restore_prepare_state() -> Result<()> {
+    let executor = ExecutorBackend::new().context("failed to create executor backend")?;
+    let kwin = KWinBackend::new();
+    executor
+        .restore_prepare_state(&kwin)
+        .context("failed to restore prepare state")?;
+    Ok(())
 }
 
 fn respond_async<T: Serialize>(result: Result<T>) -> SessionResponse {

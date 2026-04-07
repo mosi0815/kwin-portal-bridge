@@ -184,6 +184,24 @@ pub struct ResolvePrepareCaptureResult {
     pub capture_error: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstalledDesktopApp {
+    pub bundle_id: String,
+    pub display_name: String,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenAppResult {
+    pub opened: bool,
+    pub bundle_id: String,
+    pub display_name: String,
+    pub path: String,
+    pub launcher: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ToolPresence {
     pub command: String,

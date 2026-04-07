@@ -3,9 +3,10 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 use base64::Engine;
 use image::codecs::jpeg::JpegEncoder;
+use image::imageops::FilterType;
 use image::{ImageBuffer, RgbImage, Rgba};
 use lamco_pipewire::{FrameBuffer, PixelFormat, VideoFrame};
-
+use uuid::Uuid;
 use crate::kwin::KWinBackend;
 use crate::model::{SavedImageResult, ScreenInfo, ScreenshotCapture, ScreenshotResult};
 use crate::portal::PortalBackend;
@@ -258,18 +259,20 @@ fn crop_logical_region(
 }
 
 fn encode_resized_jpeg_base64(rgb: &RgbImage, target: (u32, u32)) -> Result<ScreenshotCapture> {
-    let resized = image::imageops::resize(
-        rgb,
-        target.0,
-        target.1,
-        image::imageops::FilterType::Triangle,
-    );
+    let mut filter_type = FilterType::Lanczos3;
+    if cfg!(debug_assertions) {
+        filter_type = FilterType::Nearest;
+    }
+    let resized = image::imageops::resize(rgb, target.0, target.1, filter_type);
 
     let mut jpeg = Vec::new();
     let mut encoder = JpegEncoder::new_with_quality(&mut jpeg, SCREENSHOT_JPEG_QUALITY);
     encoder
         .encode_image(&resized)
         .context("failed to JPEG-encode screenshot")?;
+    // save jpeg to file
+    let file_path = format!("/tmp/screenshot_{}.jpg", Uuid::new_v4());
+    std::fs::write(&file_path, &jpeg).context("failed to save screenshot to file")?;
 
     Ok(ScreenshotCapture {
         base64: base64::engine::general_purpose::STANDARD.encode(jpeg),
