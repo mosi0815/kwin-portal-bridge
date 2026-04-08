@@ -22,6 +22,7 @@ use crate::model::{
 };
 use crate::portal::LivePortalSession;
 use crate::session_overlay::SessionOverlayProcess;
+use crate::teach_overlay::TeachOverlayProcess;
 
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
@@ -171,7 +172,12 @@ pub async fn prepare_session_socket() -> Result<PathBuf> {
 
 pub async fn open_session_daemon(
     socket: &Path,
-) -> Result<(UnixListener, LivePortalSession, SessionOverlayProcess)> {
+) -> Result<(
+    UnixListener,
+    LivePortalSession,
+    SessionOverlayProcess,
+    TeachOverlayProcess,
+)> {
     if socket.exists() {
         std::fs::remove_file(socket).with_context(|| {
             format!(
@@ -206,12 +212,22 @@ pub async fn open_session_daemon(
             return Err(error);
         }
     };
-    Ok((listener, session, overlay))
+    let teach_overlay = match TeachOverlayProcess::spawn() {
+        Ok(teach_overlay) => teach_overlay,
+        Err(error) => {
+            let mut overlay = overlay;
+            overlay.shutdown();
+            session.shutdown().await.ok();
+            std::fs::remove_file(socket).ok();
+            return Err(error);
+        }
+    };
+    Ok((listener, session, overlay, teach_overlay))
 }
 
 pub async fn serve_session_daemon(socket: PathBuf) -> Result<()> {
-    let (listener, session, overlay) = open_session_daemon(&socket).await?;
-    serve_open_session(socket, listener, session, overlay).await
+    let (listener, session, overlay, teach_overlay) = open_session_daemon(&socket).await?;
+    serve_open_session(socket, listener, session, overlay, teach_overlay).await
 }
 
 pub async fn serve_open_session(
@@ -219,6 +235,7 @@ pub async fn serve_open_session(
     listener: UnixListener,
     mut session: LivePortalSession,
     mut overlay: SessionOverlayProcess,
+    mut teach_overlay: TeachOverlayProcess,
 ) -> Result<()> {
     let serve_result = async {
         let mut capture_drain_tick = tokio::time::interval(Duration::from_millis(100));
@@ -258,6 +275,7 @@ pub async fn serve_open_session(
     .await;
 
     restore_prepare_state().ok();
+    teach_overlay.shutdown();
     overlay.shutdown();
     session.shutdown().await.ok();
     std::fs::remove_file(&socket).ok();

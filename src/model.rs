@@ -46,6 +46,15 @@ pub struct WindowInfo {
     pub stacking_order: usize,
     pub is_active: bool,
     pub exclude_from_capture: bool,
+    pub keep_above: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WindowControlResult {
+    pub window_id: String,
+    pub geometry: Rect,
+    pub keep_above: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

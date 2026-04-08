@@ -11,7 +11,8 @@ use dbus::message::MatchRule;
 use serde::de::DeserializeOwned;
 
 use crate::model::{
-    CursorPosition, DoctorReport, ExcludeUpdate, ScreenInfo, ToolPresence, WindowInfo,
+    CursorPosition, DoctorReport, ExcludeUpdate, Rect, ScreenInfo, ToolPresence,
+    WindowControlResult, WindowInfo,
 };
 
 const DBUS_TIMEOUT: Duration = Duration::from_secs(5);
@@ -100,6 +101,27 @@ impl KWinBackend {
         }
 
         Ok(())
+    }
+
+    pub fn set_window_geometry(&self, window_id: &str, geometry: &Rect) -> Result<WindowControlResult> {
+        let geometry_json = serde_json::to_string(geometry)?;
+        let script = format!(
+            "{}\nconst TARGET_WINDOW = {:?};\nconst TARGET_GEOMETRY = {};\n{}",
+            SCRIPT_HEADER, window_id, geometry_json, SCRIPTS.set_window_geometry
+        );
+
+        let payload = run_json_script("kwin-portal-bridge-set-window-geometry", &script)?;
+        parse_payload(payload)
+    }
+
+    pub fn set_window_keep_above(&self, window_id: &str, value: bool) -> Result<WindowControlResult> {
+        let script = format!(
+            "{}\nconst TARGET_WINDOW = {:?};\nconst TARGET_VALUE = {};\n{}",
+            SCRIPT_HEADER, window_id, value, SCRIPTS.set_window_keep_above
+        );
+
+        let payload = run_json_script("kwin-portal-bridge-set-window-keep-above", &script)?;
+        parse_payload(payload)
     }
 }
 
@@ -281,12 +303,16 @@ struct Scripts<'a> {
     screens: &'a str,
     windows: &'a str,
     cursor: &'a str,
+    set_window_geometry: &'a str,
+    set_window_keep_above: &'a str,
 }
 
 const SCRIPTS: Scripts<'static> = Scripts {
     screens: SCRIPT_SCREENS,
     windows: SCRIPT_WINDOWS,
     cursor: SCRIPT_CURSOR,
+    set_window_geometry: SCRIPT_SET_WINDOW_GEOMETRY,
+    set_window_keep_above: SCRIPT_SET_WINDOW_KEEP_ABOVE,
 };
 
 const SCRIPT_SCREENS: &str = r#"
@@ -375,7 +401,8 @@ try {
         output: window.output ? window.output.name : null,
         stacking_order: typeof window.stackingOrder === "number" ? window.stackingOrder : index,
         is_active: workspace.activeWindow === window,
-        exclude_from_capture: !!window.excludeFromCapture
+        exclude_from_capture: !!window.excludeFromCapture,
+        keep_above: typeof window.keepAbove === "boolean" ? window.keepAbove : null
     }));
     bridgeResult(windows);
 } catch (error) {
@@ -434,6 +461,61 @@ try {
 
     workspace.activeWindow = target;
     bridgeResult({ activated: TARGET_WINDOW });
+} catch (error) {
+    bridgeError(String(error));
+}
+"#;
+
+const SCRIPT_SET_WINDOW_GEOMETRY: &str = r#"
+try {
+    let target = null;
+    workspace.windowList().forEach((window) => {
+        if (String(window.internalId) === TARGET_WINDOW) {
+            target = window;
+        }
+    });
+
+    if (!target) {
+        throw new Error(`No window found for id ${TARGET_WINDOW}`);
+    }
+
+    const nextGeometry = Object.assign({}, target.frameGeometry);
+    nextGeometry.x = TARGET_GEOMETRY.x;
+    nextGeometry.y = TARGET_GEOMETRY.y;
+    nextGeometry.width = TARGET_GEOMETRY.width;
+    nextGeometry.height = TARGET_GEOMETRY.height;
+    target.frameGeometry = nextGeometry;
+
+    bridgeResult({
+        windowId: TARGET_WINDOW,
+        geometry: bridgeRect(target.frameGeometry),
+        keepAbove: !!target.keepAbove
+    });
+} catch (error) {
+    bridgeError(String(error));
+}
+"#;
+
+const SCRIPT_SET_WINDOW_KEEP_ABOVE: &str = r#"
+try {
+    let target = null;
+    workspace.windowList().forEach((window) => {
+        if (String(window.internalId) === TARGET_WINDOW) {
+            target = window;
+        }
+    });
+
+    if (!target) {
+        throw new Error(`No window found for id ${TARGET_WINDOW}`);
+    }
+
+    target.keepAbove = TARGET_VALUE;
+
+    bridgeResult({
+        windowId: TARGET_WINDOW,
+        geometry: bridgeRect(target.frameGeometry),
+        keepAbove: !!target.keepAbove
+    });
 } catch (error) {
     bridgeError(String(error));
 }

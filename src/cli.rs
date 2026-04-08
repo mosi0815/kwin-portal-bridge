@@ -35,6 +35,31 @@ pub enum Command {
         #[arg(long)]
         value: bool,
     },
+    #[command(hide = true)]
+    SetWindowGeometry {
+        #[arg(long)]
+        window: String,
+        #[arg(long)]
+        x: i32,
+        #[arg(long)]
+        y: i32,
+        #[arg(long)]
+        width: i32,
+        #[arg(long)]
+        height: i32,
+    },
+    #[command(hide = true)]
+    SetWindowKeepAbove {
+        #[arg(long)]
+        window: String,
+        #[arg(long, action = clap::ArgAction::Set)]
+        value: bool,
+    },
+    #[command(hide = true)]
+    ActivateWindow {
+        #[arg(long)]
+        window: String,
+    },
     /// Preview the set of apps that would be hidden from capture for an action.
     PreviewHideSet {
         #[arg(long = "allowed-bundle-id")]
@@ -283,5 +308,39 @@ pub enum Command {
     SessionOverlay {
         #[arg(long)]
         output: Option<String>,
+    },
+    #[command(hide = true)]
+    ServeTeachOverlay {
+        #[arg(long)]
+        socket: String,
+    },
+    #[command(hide = true)]
+    TeachStep {
+        #[arg(long)]
+        payload: String,
+        #[arg(long)]
+        display: Option<String>,
+    },
+    #[command(hide = true)]
+    TeachWorking,
+    #[command(hide = true)]
+    TeachHide,
+    #[command(hide = true)]
+    TeachDisplay {
+        #[arg(long)]
+        display: String,
+    },
+    #[command(hide = true)]
+    TeachWaitEvent,
+    #[command(hide = true)]
+    TeachOverlayPreview {
+        #[arg(long)]
+        payload: String,
+        #[arg(long)]
+        display: Option<String>,
+        #[arg(long, default_value_t = false)]
+        working: bool,
+        #[arg(long)]
+        auto_exit_ms: Option<u64>,
     },
 }
