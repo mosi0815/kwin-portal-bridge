@@ -279,4 +279,9 @@ pub enum Command {
         #[arg(long)]
         socket: String,
     },
+    #[command(hide = true)]
+    SessionOverlay {
+        #[arg(long)]
+        output: Option<String>,
+    },
 }

@@ -12,6 +12,8 @@ use crate::model::{
 };
 use crate::portal::PortalBackend;
 
+const BRIDGE_BUNDLE_ID: &str = env!("CARGO_PKG_NAME");
+
 pub struct ExecutorBackend {
     state: ExcludeStateStore,
 }
@@ -33,8 +35,7 @@ impl ExecutorBackend {
         let screens = kwin.list_screens()?;
         let screen = resolve_optional_screen(&screens, display)?;
         let windows = kwin.list_windows()?;
-        let candidates =
-            select_hide_candidates(&windows, screen, allowed_bundle_ids, host_bundle_id);
+        let candidates = select_hide_candidates(&windows, screen, allowed_bundle_ids, host_bundle_id);
         Ok(to_app_refs(&candidates))
     }
 
@@ -48,7 +49,7 @@ impl ExecutorBackend {
 
     pub fn app_under_point(&self, x: i32, y: i32, kwin: &KWinBackend) -> Result<Option<AppRef>> {
         let windows = kwin.list_windows()?;
-        Ok(top_window_at_point(&windows, x, y).map(app_ref_for_window))
+        Ok(top_window_at_point_ignoring_bridge(&windows, x, y).map(app_ref_for_window))
     }
 
     pub fn raise_allowed_window_at_point(
@@ -415,7 +416,8 @@ impl ExecutorBackend {
         let screen = resolve_optional_screen(&screens, display)?;
         let windows = kwin.list_windows()?;
         let activated = active_bundle_id(&windows);
-        let candidates = select_hide_candidates(&windows, screen, allowed_bundle_ids, host_bundle_id);
+        let candidates =
+            select_hide_candidates(&windows, screen, allowed_bundle_ids, host_bundle_id);
         let changed_window_ids = windows_to_change(&candidates, true);
 
         if !changed_window_ids.is_empty() {
@@ -767,6 +769,18 @@ fn display_name_for_window(window: &WindowInfo) -> String {
     bundle_id_for_window(window).unwrap_or_else(|| window.id.clone())
 }
 
+fn is_bridge_window(window: &WindowInfo) -> bool {
+    [
+        window.desktop_file_name.as_deref(),
+        window.resource_class.as_deref(),
+        window.resource_name.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .filter_map(|value| normalize_bundle_id(Some(value)))
+    .any(|value| value == BRIDGE_BUNDLE_ID)
+}
+
 fn is_shell_window(window: &WindowInfo) -> bool {
     window.is_dock.unwrap_or(false) || window.is_desktop.unwrap_or(false)
 }
@@ -789,6 +803,17 @@ fn top_window_at_point(windows: &[WindowInfo], x: i32, y: i32) -> Option<&Window
         .into_iter()
         .rev()
         .next()
+}
+
+fn top_window_at_point_ignoring_bridge(
+    windows: &[WindowInfo],
+    x: i32,
+    y: i32,
+) -> Option<&WindowInfo> {
+    windows_at_point_in_z_order(windows, x, y)
+        .into_iter()
+        .rev()
+        .find(|window| !is_bridge_window(window))
 }
 
 fn windows_at_point_in_z_order(windows: &[WindowInfo], x: i32, y: i32) -> Vec<&WindowInfo> {

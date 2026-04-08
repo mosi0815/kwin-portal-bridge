@@ -8,6 +8,7 @@ mod json;
 mod kwin;
 mod model;
 mod portal;
+mod session_overlay;
 mod token_store;
 
 use anyhow::Result;
@@ -25,6 +26,7 @@ use crate::executor::ExecutorBackend;
 use crate::json::print_json;
 use crate::kwin::KWinBackend;
 use crate::portal::PortalBackend;
+use crate::session_overlay::run as run_session_overlay;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -43,9 +45,9 @@ async fn main() -> Result<()> {
         Command::SessionStart { foreground } => {
             if foreground {
                 let socket = prepare_session_socket().await?;
-                let (listener, session) = open_session_daemon(&socket).await?;
+                let (listener, session, overlay) = open_session_daemon(&socket).await?;
                 print_json(&session.info())?;
-                serve_open_session(socket, listener, session).await?;
+                serve_open_session(socket, listener, session, overlay).await?;
             } else {
                 print_json(&start_session_daemon().await?)?;
             }
@@ -311,6 +313,9 @@ async fn main() -> Result<()> {
         }
         Command::ServeSession { socket } => {
             serve_session_daemon(std::path::PathBuf::from(socket)).await?;
+        }
+        Command::SessionOverlay { output } => {
+            run_session_overlay(output.as_deref())?;
         }
     }
 

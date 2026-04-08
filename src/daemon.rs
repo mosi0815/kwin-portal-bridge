@@ -21,6 +21,7 @@ use crate::model::{
     ScreenshotResult,
 };
 use crate::portal::LivePortalSession;
+use crate::session_overlay::SessionOverlayProcess;
 
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
@@ -168,7 +169,9 @@ pub async fn prepare_session_socket() -> Result<PathBuf> {
     Ok(socket)
 }
 
-pub async fn open_session_daemon(socket: &Path) -> Result<(UnixListener, LivePortalSession)> {
+pub async fn open_session_daemon(
+    socket: &Path,
+) -> Result<(UnixListener, LivePortalSession, SessionOverlayProcess)> {
     if socket.exists() {
         std::fs::remove_file(socket).with_context(|| {
             format!(
@@ -188,19 +191,34 @@ pub async fn open_session_daemon(socket: &Path) -> Result<(UnixListener, LivePor
 
     let listener = UnixListener::bind(socket)
         .with_context(|| format!("failed to bind session socket `{}`", socket.display()))?;
-    let session = LivePortalSession::open().await?;
-    Ok((listener, session))
+    let session = match LivePortalSession::open().await {
+        Ok(session) => session,
+        Err(error) => {
+            std::fs::remove_file(socket).ok();
+            return Err(error);
+        }
+    };
+    let overlay = match SessionOverlayProcess::spawn() {
+        Ok(overlay) => overlay,
+        Err(error) => {
+            session.shutdown().await.ok();
+            std::fs::remove_file(socket).ok();
+            return Err(error);
+        }
+    };
+    Ok((listener, session, overlay))
 }
 
 pub async fn serve_session_daemon(socket: PathBuf) -> Result<()> {
-    let (listener, session) = open_session_daemon(&socket).await?;
-    serve_open_session(socket, listener, session).await
+    let (listener, session, overlay) = open_session_daemon(&socket).await?;
+    serve_open_session(socket, listener, session, overlay).await
 }
 
 pub async fn serve_open_session(
     socket: PathBuf,
     listener: UnixListener,
     mut session: LivePortalSession,
+    mut overlay: SessionOverlayProcess,
 ) -> Result<()> {
     let serve_result = async {
         let mut capture_drain_tick = tokio::time::interval(Duration::from_millis(100));
@@ -240,6 +258,7 @@ pub async fn serve_open_session(
     .await;
 
     restore_prepare_state().ok();
+    overlay.shutdown();
     session.shutdown().await.ok();
     std::fs::remove_file(&socket).ok();
     serve_result

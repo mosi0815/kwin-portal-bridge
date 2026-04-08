@@ -11,6 +11,8 @@ clap = { version = "4.5", features = ["derive"] }
 dbus = "0.9"
 freedesktop-desktop-entry = { version = "0.8", default-features = false }
 freedesktop-icons = "0.4"
+iced = "0.14.0"
+iced_layershell = "0.17.1"
 image = "0.25"
 lamco-portal = "0.4"
 lamco-pipewire = "0.4"
