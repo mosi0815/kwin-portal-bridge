@@ -11,9 +11,10 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use iced::time;
-use iced::widget::{Space, button, canvas, column, container, row, text};
+use iced::font;
+use iced::widget::{Space, button, canvas, column, container, rich_text, row, scrollable, span, text as plain_text};
 use iced::{
-    Alignment, Border, Color, Element, Length, Point, Radians, Rectangle, Shadow, Size,
+    Alignment, Border, Color, Element, Font, Length, Point, Radians, Rectangle, Shadow, Size,
     Subscription, Task, Theme, Vector, border, window,
 };
 use iced_layershell::actions::ActionCallback;
@@ -35,10 +36,13 @@ const ARROW_SIZE: f32 = 10.0;
 const ARROW_GAP: f32 = 16.0;
 const BUBBLE_WIDTH: f32 = 420.0;
 const BUBBLE_MIN_HEIGHT: f32 = 140.0;
-const BUBBLE_MAX_HEIGHT: f32 = 320.0;
+const BUBBLE_MAX_HEIGHT: f32 = 460.0;
 const BUBBLE_WORKING_HEIGHT: f32 = 96.0;
 const BUBBLE_RADIUS: f32 = 16.0;
 const ACTION_ROW_HEIGHT: f32 = 40.0;
+const BUBBLE_TOP_SECTION_HEIGHT: f32 = 34.0;
+const BUBBLE_VERTICAL_GAP: f32 = 14.0;
+const BUBBLE_PREVIEW_PADDING_HEIGHT: f32 = 18.0;
 const EXPLANATION_CHARS_PER_LINE: usize = 46;
 const PREVIEW_CHARS_PER_LINE: usize = 56;
 const SPINNER_PERIOD_SECONDS: f32 = 0.8;
@@ -918,10 +922,12 @@ fn bubble_body(
     layout: &BubbleLayout,
     spinner_angle: f32,
 ) -> Element<'static, Message> {
+    let next_preview = normalize_overlay_text(&payload.next_preview);
+
     let body_content: Element<'static, Message> = if snapshot.mode == TeachVisualMode::Working {
         row![
             spinner(spinner_angle),
-            text("Working...")
+            plain_text("Working...")
                 .size(14)
                 .color(Color::from_rgb(0.396, 0.388, 0.345)),
             Space::new().width(Length::Fill).height(Length::Shrink),
@@ -931,23 +937,25 @@ fn bubble_body(
         .align_y(Alignment::Center)
         .into()
     } else {
-        let mut content = column![
-            text("Claude")
+        let content = column![
+            plain_text("Claude")
                 .size(14)
                 .color(Color::from_rgb(0.851, 0.467, 0.341)),
-            text(payload.explanation.clone())
-                .size(14)
-                .color(Color::from_rgb(0.161, 0.149, 0.106)),
+            overlay_markdown(
+                &payload.explanation,
+                14,
+                Color::from_rgb(0.161, 0.149, 0.106),
+            ),
         ]
         .spacing(10);
 
-        if !payload.next_preview.trim().is_empty() {
-            content = content.push(
-                container(
-                    text(payload.next_preview.clone())
-                        .size(12)
-                        .color(Color::from_rgb(0.396, 0.388, 0.345)),
-                )
+        let next_preview_block = if !next_preview.trim().is_empty() {
+            Some(
+                container(overlay_markdown(
+                    &payload.next_preview,
+                    12,
+                    Color::from_rgb(0.396, 0.388, 0.345),
+                ))
                 .padding(8.0)
                 .style(|_| container::Style {
                     border: Border {
@@ -957,21 +965,33 @@ fn bubble_body(
                     },
                     ..container::Style::default()
                 }),
-            );
+            )
+        } else {
+            None
+        };
+
+        let mut body = column![
+            scrollable(content)
+                .height(Length::Fill)
+                .width(Length::Fill),
+        ]
+        .spacing(14)
+        .height(Length::Fill);
+
+        if let Some(next_preview_block) = next_preview_block {
+            body = body.push(next_preview_block);
         }
 
-        content = content
-            .push(
-                row![
-                    Space::new().width(Length::Fill).height(Length::Shrink),
-                    secondary_button("Exit", Message::ExitPressed),
-                    primary_button("Next", Message::NextPressed),
-                ]
-                .spacing(8)
-                .align_y(Alignment::Center),
-            );
-
-        content.into()
+        body.push(
+            row![
+                Space::new().width(Length::Fill).height(Length::Shrink),
+                secondary_button("Exit", Message::ExitPressed),
+                primary_button("Next", Message::NextPressed),
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center),
+        )
+        .into()
     };
 
     container(body_content)
@@ -997,8 +1017,198 @@ fn bubble_body_style() -> container::Style {
     }
 }
 
+type RichSpan = iced::widget::text::Span<'static>;
+
+#[derive(Clone, Copy, Default)]
+struct InlineMarkdownStyle {
+    bold: bool,
+    italic: bool,
+    code: bool,
+}
+
+fn overlay_markdown(content: &str, size: u32, color: Color) -> Element<'static, Message> {
+    let mut lines = column![].spacing(8).width(Length::Fill);
+
+    for raw_line in content.lines() {
+        lines = lines.push(overlay_markdown_line(raw_line, size, color));
+    }
+
+    if content.trim().is_empty() {
+        lines = lines.push(Space::new().width(Length::Fill).height(0));
+    }
+
+    lines.into()
+}
+
+fn overlay_markdown_line(raw_line: &str, base_size: u32, color: Color) -> Element<'static, Message> {
+    let trimmed = raw_line.trim();
+    if trimmed.is_empty() {
+        return Space::new().width(Length::Fill).height(6).into();
+    }
+
+    let (heading_level, content) = if let Some(content) = trimmed.strip_prefix("### ") {
+        (Some(3_u8), content)
+    } else if let Some(content) = trimmed.strip_prefix("## ") {
+        (Some(2_u8), content)
+    } else if let Some(content) = trimmed.strip_prefix("# ") {
+        (Some(1_u8), content)
+    } else {
+        (None, trimmed)
+    };
+
+    let mut spans = if let Some(content) = content
+        .strip_prefix("- ")
+        .or_else(|| content.strip_prefix("* "))
+        .or_else(|| content.strip_prefix("+ "))
+    {
+        let mut spans = vec![span("• ")];
+        spans.extend(parse_inline_markdown(content.trim()));
+        spans
+    } else if let Some(content) = content.strip_prefix("> ") {
+        parse_inline_markdown(content.trim())
+    } else if let Some((marker, content)) = split_ordered_list_item(content) {
+        let mut spans = vec![span(format!("{marker} "))];
+        spans.extend(parse_inline_markdown(content.trim()));
+        spans
+    } else {
+        parse_inline_markdown(content)
+    };
+
+    let line_height = if let Some(level) = heading_level {
+        style_heading_spans(&mut spans, base_size, level);
+        match level {
+            1 => 1.2,
+            2 => 1.24,
+            _ => 1.28,
+        }
+    } else {
+        1.35
+    };
+
+    rich_text(spans)
+        .size(base_size)
+        .line_height(line_height)
+        .color(color)
+        .width(Length::Fill)
+        .into()
+}
+
+fn parse_inline_markdown(content: &str) -> Vec<RichSpan> {
+    let mut spans = Vec::new();
+    let mut style = InlineMarkdownStyle::default();
+    let mut buffer = String::new();
+    let chars: Vec<char> = content.chars().collect();
+    let mut i = 0usize;
+
+    while i < chars.len() {
+        let current = chars[i];
+        let next = chars.get(i + 1).copied();
+
+        if current == '\\' && let Some(escaped) = next {
+            buffer.push(escaped);
+            i += 2;
+            continue;
+        }
+
+        if current == '`' {
+            flush_inline_markdown_buffer(&mut spans, &mut buffer, style);
+            style.code = !style.code;
+            i += 1;
+            continue;
+        }
+
+        if !style.code && current == '*' && next == Some('*') {
+            flush_inline_markdown_buffer(&mut spans, &mut buffer, style);
+            style.bold = !style.bold;
+            i += 2;
+            continue;
+        }
+
+        if !style.code && current == '_' && next == Some('_') {
+            flush_inline_markdown_buffer(&mut spans, &mut buffer, style);
+            style.bold = !style.bold;
+            i += 2;
+            continue;
+        }
+
+        if !style.code && (current == '*' || current == '_') {
+            flush_inline_markdown_buffer(&mut spans, &mut buffer, style);
+            style.italic = !style.italic;
+            i += 1;
+            continue;
+        }
+
+        if !style.code && current == '~' && next == Some('~') {
+            i += 2;
+            continue;
+        }
+
+        buffer.push(current);
+        i += 1;
+    }
+
+    flush_inline_markdown_buffer(&mut spans, &mut buffer, style);
+    spans
+}
+
+fn flush_inline_markdown_buffer(
+    spans: &mut Vec<RichSpan>,
+    buffer: &mut String,
+    style: InlineMarkdownStyle,
+) {
+    if buffer.is_empty() {
+        return;
+    }
+
+    let text = std::mem::take(buffer);
+    let mut fragment = span(text);
+
+    if style.code {
+        fragment = fragment
+            .font(Font::MONOSPACE)
+            .color(Color::from_rgb(0.318, 0.259, 0.192))
+            .background(Color::from_rgba(0.831, 0.776, 0.694, 0.45))
+            .border(border::rounded(4.0))
+            .padding([1.0, 4.0]);
+    } else if style.bold || style.italic {
+        fragment = fragment.font(Font {
+            weight: if style.bold {
+                font::Weight::Bold
+            } else {
+                font::Weight::Normal
+            },
+            style: if style.italic {
+                font::Style::Italic
+            } else {
+                font::Style::Normal
+            },
+            ..Font::default()
+        });
+    }
+
+    spans.push(fragment);
+}
+
+fn style_heading_spans(spans: &mut [RichSpan], base_size: u32, level: u8) {
+    let heading_size = match level {
+        1 => base_size + 8,
+        2 => base_size + 5,
+        _ => base_size + 3,
+    };
+
+    for fragment in spans {
+        fragment.size = Some(heading_size.into());
+
+        let existing = fragment.font.unwrap_or_default();
+        fragment.font = Some(Font {
+            weight: font::Weight::Bold,
+            ..existing
+        });
+    }
+}
+
 fn primary_button(label: &'static str, message: Message) -> Element<'static, Message> {
-    button(text(label).size(13).color(Color::WHITE))
+    button(plain_text(label).size(13).color(Color::WHITE))
         .padding([8.0, 16.0])
         .style(|_, status| match status {
             button::Status::Hovered => button::Style {
@@ -1043,7 +1253,7 @@ fn primary_button(label: &'static str, message: Message) -> Element<'static, Mes
 }
 
 fn secondary_button(label: &'static str, message: Message) -> Element<'static, Message> {
-    button(text(label).size(13).color(Color::from_rgb(0.239, 0.224, 0.161)))
+    button(plain_text(label).size(13).color(Color::from_rgb(0.239, 0.224, 0.161)))
         .padding([8.0, 16.0])
         .style(|_, status| {
             let background = match status {
@@ -1210,21 +1420,119 @@ fn estimated_body_height(snapshot: &TeachOverlaySnapshot, payload: &TeachStepPay
         return BUBBLE_WORKING_HEIGHT;
     }
 
-    let explanation_lines = estimate_wrapped_lines(&payload.explanation, EXPLANATION_CHARS_PER_LINE) as f32;
-    let preview_lines = if payload.next_preview.trim().is_empty() {
+    let explanation = normalize_overlay_text(&payload.explanation);
+    let next_preview = normalize_overlay_text(&payload.next_preview);
+
+    let explanation_lines = estimate_wrapped_lines(&explanation, EXPLANATION_CHARS_PER_LINE) as f32;
+    let preview_lines = if next_preview.trim().is_empty() {
         0.0
     } else {
-        estimate_wrapped_lines(&payload.next_preview, PREVIEW_CHARS_PER_LINE) as f32
+        estimate_wrapped_lines(&next_preview, PREVIEW_CHARS_PER_LINE) as f32
     };
 
     let preview_block = if preview_lines > 0.0 {
-        18.0 + preview_lines * 17.0
+        BUBBLE_PREVIEW_PADDING_HEIGHT + preview_lines * 18.0
     } else {
         0.0
     };
 
-    (76.0 + explanation_lines * 21.0 + preview_block + ACTION_ROW_HEIGHT)
+    let heading_bonus = markdown_heading_bonus(&payload.explanation)
+        + markdown_heading_bonus(&payload.next_preview);
+    let explanation_block = explanation_lines * 24.0;
+    let section_gaps = if preview_lines > 0.0 {
+        BUBBLE_VERTICAL_GAP * 2.0
+    } else {
+        BUBBLE_VERTICAL_GAP
+    };
+
+    (
+        BUBBLE_TOP_SECTION_HEIGHT
+            + explanation_block
+            + preview_block
+            + ACTION_ROW_HEIGHT
+            + section_gaps
+            + 44.0
+            + heading_bonus
+    )
         .clamp(BUBBLE_MIN_HEIGHT, BUBBLE_MAX_HEIGHT)
+}
+
+fn markdown_heading_bonus(text: &str) -> f32 {
+    text.lines()
+        .map(|line| {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("# ") {
+                22.0
+            } else if trimmed.starts_with("## ") {
+                16.0
+            } else if trimmed.starts_with("### ") {
+                10.0
+            } else {
+                0.0
+            }
+        })
+        .sum()
+}
+
+fn normalize_overlay_text(text: &str) -> String {
+    let mut normalized = Vec::new();
+
+    for raw_line in text.lines() {
+        let trimmed = raw_line.trim();
+        if trimmed.is_empty() {
+            normalized.push(String::new());
+            continue;
+        }
+
+        if let Some(content) = trimmed
+            .strip_prefix("- ")
+            .or_else(|| trimmed.strip_prefix("* "))
+            .or_else(|| trimmed.strip_prefix("+ "))
+        {
+            normalized.push(format!("• {}", strip_inline_markdown(content.trim())));
+            continue;
+        }
+
+        if let Some(content) = trimmed.strip_prefix("> ") {
+            normalized.push(strip_inline_markdown(content.trim()));
+            continue;
+        }
+
+        if let Some((marker, content)) = split_ordered_list_item(trimmed) {
+            normalized.push(format!("{marker} {}", strip_inline_markdown(content.trim())));
+            continue;
+        }
+
+        normalized.push(strip_inline_markdown(trimmed));
+    }
+
+    normalized.join("\n")
+}
+
+fn split_ordered_list_item(line: &str) -> Option<(String, &str)> {
+    let digit_count = line.chars().take_while(|ch| ch.is_ascii_digit()).count();
+    if digit_count == 0 {
+        return None;
+    }
+
+    let rest = &line[digit_count..];
+    if let Some(content) = rest.strip_prefix(". ") {
+        return Some((format!("{}.", &line[..digit_count]), content));
+    }
+
+    if let Some(content) = rest.strip_prefix(") ") {
+        return Some((format!("{})", &line[..digit_count]), content));
+    }
+
+    None
+}
+
+fn strip_inline_markdown(text: &str) -> String {
+    text.replace("**", "")
+        .replace("__", "")
+        .replace("~~", "")
+        .replace('`', "")
+        .replace('\\', "")
 }
 
 fn estimate_wrapped_lines(text: &str, max_chars: usize) -> usize {

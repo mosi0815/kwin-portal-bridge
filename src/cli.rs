@@ -13,6 +13,8 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Start the standalone MCP server on stdio.
+    Mcp,
     /// Start a long-lived portal session daemon for this tool-use lock.
     SessionStart {
         #[arg(long, default_value_t = false)]
@@ -308,6 +310,11 @@ pub enum Command {
     SessionOverlay {
         #[arg(long)]
         output: Option<String>,
+    },
+    #[command(hide = true)]
+    SetOverlayDisplay {
+        #[arg(long)]
+        display: Option<String>,
     },
     #[command(hide = true)]
     ServeTeachOverlay {

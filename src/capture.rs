@@ -1,3 +1,4 @@
+use std::io::Cursor;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
@@ -105,6 +106,17 @@ pub(crate) fn screenshot_result_from_frame(
         origin_x: screen.geometry.x,
         origin_y: screen.geometry.y,
     })
+}
+
+pub(crate) fn png_base64_from_frame(frame: &VideoFrame) -> Result<String> {
+    let rgba = rgba_from_frame(frame)?;
+    let image = ImageBuffer::<Rgba<u8>, Vec<u8>>::from_raw(frame.width, frame.height, rgba)
+        .ok_or_else(|| anyhow::anyhow!("failed to construct RGBA image buffer"))?;
+    let mut png = Vec::new();
+    image
+        .write_to(&mut Cursor::new(&mut png), image::ImageFormat::Png)
+        .context("failed to encode PNG from captured frame")?;
+    Ok(base64::engine::general_purpose::STANDARD.encode(png))
 }
 
 pub(crate) fn zoom_result_from_frame(

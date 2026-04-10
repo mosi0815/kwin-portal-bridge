@@ -25,10 +25,11 @@ const GLOW_BANDS: [(f32, f32); 3] = [(0.16, 0.22), (0.09, 0.15), (0.03, 0.07)];
 
 pub struct SessionOverlayProcess {
     child: Child,
+    output: Option<String>,
 }
 
 impl SessionOverlayProcess {
-    pub fn spawn() -> Result<Self> {
+    pub fn spawn(output: Option<&str>) -> Result<Self> {
         let current_exe =
             std::env::current_exe().context("failed to resolve current executable")?;
         let mut command = Command::new(current_exe);
@@ -37,6 +38,10 @@ impl SessionOverlayProcess {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
+
+        if let Some(output) = output {
+            command.arg("--output").arg(output);
+        }
 
         #[cfg(unix)]
         unsafe {
@@ -52,7 +57,10 @@ impl SessionOverlayProcess {
             .spawn()
             .context("failed to spawn session activity overlay")?;
 
-        Ok(Self { child })
+        Ok(Self {
+            child,
+            output: output.map(ToOwned::to_owned),
+        })
     }
 
     pub fn shutdown(&mut self) {
@@ -62,6 +70,18 @@ impl SessionOverlayProcess {
 
         self.child.kill().ok();
         self.child.wait().ok();
+    }
+
+    pub fn set_output(&mut self, output: Option<&str>) -> Result<()> {
+        let next_output = output.map(ToOwned::to_owned);
+        if self.output == next_output {
+            return Ok(());
+        }
+
+        self.shutdown();
+        let replacement = Self::spawn(output)?;
+        *self = replacement;
+        Ok(())
     }
 }
 

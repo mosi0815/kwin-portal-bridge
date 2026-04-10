@@ -1,6 +1,7 @@
+use rmcp::schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct Rect {
     pub x: i32,
     pub y: i32,
@@ -8,13 +9,13 @@ pub struct Rect {
     pub height: i32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct CursorPosition {
     pub x: i32,
     pub y: i32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ScreenInfo {
     pub id: String,
     pub name: String,
@@ -25,7 +26,7 @@ pub struct ScreenInfo {
     pub is_primary: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct WindowInfo {
     pub id: String,
     pub title: String,
@@ -63,7 +64,7 @@ pub struct ExcludeUpdate {
     pub value: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ScreenshotResult {
     pub base64: String,
@@ -76,14 +77,14 @@ pub struct ScreenshotResult {
     pub origin_y: i32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ScreenshotCapture {
     pub base64: String,
     pub width: u32,
     pub height: u32,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct AppRef {
     pub bundle_id: String,
@@ -107,7 +108,7 @@ pub struct RaiseWindowAtPointResult {
     pub blocked_by: Option<AppRef>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct PointerActionResult {
     pub action: String,
@@ -119,7 +120,7 @@ pub struct PointerActionResult {
     pub blocked_by: Option<AppRef>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct KeyboardActionResult {
     pub action: String,
@@ -130,7 +131,7 @@ pub struct KeyboardActionResult {
     pub duration_ms: Option<u64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct TypeActionResult {
     pub action: String,
@@ -138,14 +139,14 @@ pub struct TypeActionResult {
     pub char_count: usize,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ClipboardReadResult {
     pub action: String,
     pub text: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ClipboardWriteResult {
     pub action: String,
@@ -153,7 +154,7 @@ pub struct ClipboardWriteResult {
     pub char_count: usize,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct DragActionResult {
     pub action: String,
@@ -193,7 +194,7 @@ pub struct ResolvePrepareCaptureResult {
     pub capture_error: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct InstalledDesktopApp {
     pub bundle_id: String,
@@ -201,7 +202,7 @@ pub struct InstalledDesktopApp {
     pub path: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct OpenAppResult {
     pub opened: bool,

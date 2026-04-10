@@ -3,3 +3,7 @@ llm_corner
 /patcher/index_formatted.js
 /patcher/index.js
 /docs/workspace.json
+/docs/iced-test
+/docs
+.claude
+/patcher/executor.ts

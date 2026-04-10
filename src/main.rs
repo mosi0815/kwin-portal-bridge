@@ -6,11 +6,14 @@ mod exclude_state;
 mod executor;
 mod json;
 mod kwin;
+mod mcp;
 mod model;
 mod portal;
 mod session_overlay;
 mod teach_overlay;
 mod token_store;
+mod xorg_capture;
+mod error;
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -26,6 +29,7 @@ use crate::desktop_apps::DesktopAppService;
 use crate::executor::ExecutorBackend;
 use crate::json::print_json;
 use crate::kwin::KWinBackend;
+use crate::mcp::run_mcp;
 use crate::model::Rect;
 use crate::portal::PortalBackend;
 use crate::session_overlay::run as run_session_overlay;
@@ -50,6 +54,9 @@ async fn main() -> Result<()> {
     let portal = PortalBackend::new;
 
     match cli.command {
+        Command::Mcp => {
+            run_mcp().await?;
+        }
         Command::SessionStart { foreground } => {
             if foreground {
                 let socket = prepare_session_socket().await?;
@@ -368,6 +375,9 @@ async fn main() -> Result<()> {
         }
         Command::SessionOverlay { output } => {
             run_session_overlay(output.as_deref())?;
+        }
+        Command::SetOverlayDisplay { display } => {
+            print_json(&portal().set_overlay_display(display.as_deref()).await?)?;
         }
         Command::ServeTeachOverlay { socket } => {
             serve_teach_overlay(std::path::PathBuf::from(socket))?;

@@ -97,6 +97,9 @@ pub enum SessionRequest {
         w: i32,
         h: i32,
     },
+    SetOverlayDisplay {
+        display: Option<String>,
+    },
     ReadClipboard,
     WriteClipboard {
         text: String,
@@ -204,7 +207,7 @@ pub async fn open_session_daemon(
             return Err(error);
         }
     };
-    let overlay = match SessionOverlayProcess::spawn() {
+    let overlay = match SessionOverlayProcess::spawn(None) {
         Ok(overlay) => overlay,
         Err(error) => {
             session.shutdown().await.ok();
@@ -262,7 +265,7 @@ pub async fn serve_open_session(
                 accepted = listener.accept() => {
                     let (mut stream, _) = accepted.context("failed to accept IPC client")?;
                     let request = read_request(&mut stream).await?;
-                    let (response, should_shutdown) = handle_request(&mut session, request).await;
+                    let (response, should_shutdown) = handle_request(&mut session, &mut overlay, request).await;
                     write_response(&mut stream, response).await?;
                     if should_shutdown {
                         break;
@@ -368,6 +371,7 @@ async fn write_response(stream: &mut UnixStream, response: SessionResponse) -> R
 
 async fn handle_request(
     session: &mut LivePortalSession,
+    overlay: &mut SessionOverlayProcess,
     request: SessionRequest,
 ) -> (SessionResponse, bool) {
     let result = match request {
@@ -441,11 +445,22 @@ async fn handle_request(
         SessionRequest::CaptureZoom { screen, x, y, w, h } => {
             respond_async(capture_zoom(session, &screen, x, y, w, h).await)
         }
+        SessionRequest::SetOverlayDisplay { display } => {
+            respond_async(set_overlay_display(overlay, display.as_deref()))
+        }
         SessionRequest::ReadClipboard => respond_async(read_clipboard().await),
         SessionRequest::WriteClipboard { text } => respond_async(write_clipboard(text).await),
     };
 
     (result, false)
+}
+
+fn set_overlay_display(
+    overlay: &mut SessionOverlayProcess,
+    display: Option<&str>,
+) -> Result<Value> {
+    overlay.set_output(display)?;
+    Ok(Value::Null)
 }
 
 async fn capture_still(

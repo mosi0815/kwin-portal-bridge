@@ -214,6 +214,14 @@ impl PortalBackend {
         .await
     }
 
+    pub async fn set_overlay_display(&self, display: Option<&str>) -> Result<serde_json::Value> {
+        let value: serde_json::Value = request(SessionRequest::SetOverlayDisplay {
+            display: display.map(ToOwned::to_owned),
+        })
+        .await?;
+        Ok(value)
+    }
+
     pub async fn read_first_frame(
         &self,
         stream: Option<u32>,
@@ -231,6 +239,35 @@ impl PortalBackend {
 
     pub async fn capture_raw_frame(&self, stream: Option<u32>) -> Result<CapturedFrame> {
         self.capture_raw_frame_with_options(stream, false).await
+    }
+
+    pub async fn capture_raw_frame_for_screen(&self, screen: &ScreenInfo) -> Result<CapturedFrame> {
+        let (manager, session, restore_token) = start_session().await?;
+        let info = session_info(&session, restore_token);
+        let target_stream = match_stream_to_screen(&info.streams, screen)?;
+        let fd = dup_fd(session.pipewire_fd())?;
+        let pw_stream = to_pipewire_stream(&target_stream);
+        let frame_task =
+            tokio::task::spawn_blocking(move || read_one_pipewire_frame(fd, pw_stream));
+
+        let frame = frame_task
+            .await
+            .context("PipeWire frame worker task failed to join")??;
+
+        manager.cleanup().await.ok();
+        drop(session);
+
+        let frame_byte_len = match &frame.buffer {
+            FrameBuffer::Memory(data) => data.len(),
+            FrameBuffer::DmaBuf(_) => 0,
+        };
+
+        Ok(CapturedFrame {
+            session: info,
+            target_stream,
+            frame,
+            frame_byte_len,
+        })
     }
 
     async fn poke_pointer(

@@ -41,10 +41,7 @@ impl ExecutorBackend {
 
     pub fn frontmost_app(&self, kwin: &KWinBackend) -> Result<Option<AppRef>> {
         let windows = kwin.list_windows()?;
-        Ok(windows
-            .iter()
-            .find(|window| window.is_active)
-            .map(app_ref_for_window))
+        Ok(frontmost_window_ignoring_bridge(&windows).map(app_ref_for_window))
     }
 
     pub fn app_under_point(&self, x: i32, y: i32, kwin: &KWinBackend) -> Result<Option<AppRef>> {
@@ -415,7 +412,6 @@ impl ExecutorBackend {
         let screens = kwin.list_screens()?;
         let screen = resolve_optional_screen(&screens, display)?;
         let windows = kwin.list_windows()?;
-        let activated = active_bundle_id(&windows);
         let candidates =
             select_hide_candidates(&windows, screen, allowed_bundle_ids, host_bundle_id);
         let changed_window_ids = windows_to_change(&candidates, true);
@@ -426,6 +422,9 @@ impl ExecutorBackend {
         } else {
             self.state.clear()?;
         }
+
+        let activated =
+            activate_visible_windows_in_z_order(&windows, screen, allowed_bundle_ids, host_bundle_id, kwin)?;
 
         Ok(PrepareActionResult {
             hidden: hidden_bundle_ids(&candidates),
@@ -474,10 +473,10 @@ impl ExecutorBackend {
         kwin: &KWinBackend,
     ) -> Result<ResolvePrepareCaptureResult> {
         let screens = kwin.list_screens()?;
-        let screen = resolve_screen(&screens, display)?;
+        let windows = kwin.list_windows()?;
+        let screen = resolve_capture_screen(&screens, &windows, display, host_bundle_id)?;
 
         let (hidden, activated, changed_window_ids) = if do_hide {
-            let windows = kwin.list_windows()?;
             let candidates =
                 select_hide_candidates(&windows, Some(screen), allowed_bundle_ids, host_bundle_id);
             let hidden = hidden_bundle_ids(&candidates);
@@ -516,6 +515,38 @@ fn resolve_optional_screen<'a>(
         Some(_) => Ok(Some(resolve_screen(screens, selector)?)),
         None => Ok(None),
     }
+}
+
+fn resolve_capture_screen<'a>(
+    screens: &'a [ScreenInfo],
+    windows: &[WindowInfo],
+    selector: Option<&str>,
+    host_bundle_id: &str,
+) -> Result<&'a ScreenInfo> {
+    match selector {
+        Some(_) => resolve_screen(screens, selector),
+        None => auto_capture_screen(screens, windows, host_bundle_id),
+    }
+}
+
+fn auto_capture_screen<'a>(
+    screens: &'a [ScreenInfo],
+    windows: &[WindowInfo],
+    host_bundle_id: &str,
+) -> Result<&'a ScreenInfo> {
+    if screens.is_empty() {
+        bail!("no screens reported by KWin");
+    }
+
+    if let Some(screen) = screen_for_host_window(screens, windows, host_bundle_id) {
+        return Ok(screen);
+    }
+
+    screens
+        .iter()
+        .find(|screen| screen.is_primary)
+        .or_else(|| screens.first())
+        .ok_or_else(|| anyhow::anyhow!("no screen available"))
 }
 
 fn screen_at_point<'a>(screens: &'a [ScreenInfo], x: i32, y: i32) -> Result<&'a ScreenInfo> {
@@ -586,6 +617,56 @@ fn select_hide_candidates<'a>(
         .filter(|window| !is_shell_window(window))
         .filter(|window| !is_window_allowed(window, allowed_bundle_ids, host_bundle_id))
         .collect()
+}
+
+fn activate_visible_windows_in_z_order(
+    windows: &[WindowInfo],
+    screen: Option<&ScreenInfo>,
+    allowed_bundle_ids: &[String],
+    host_bundle_id: &str,
+    kwin: &KWinBackend,
+) -> Result<Option<String>> {
+    let mut visible_windows: Vec<_> = windows
+        .iter()
+        .filter(|window| window_matches_screen(window, screen))
+        .filter(|window| !is_shell_window(window))
+        .filter(|window| !is_bridge_window(window))
+        .filter(|window| !is_host_window(window, host_bundle_id))
+        .filter(|window| is_window_visible_for_hit_test(window))
+        .collect();
+
+    visible_windows.sort_by_key(|window| window.stacking_order);
+
+    let mut seen_allowed = false;
+    let mut needs_activation = false;
+    for window in visible_windows.iter().rev() {
+        if is_window_allowed(window, allowed_bundle_ids, host_bundle_id) {
+            seen_allowed = true;
+            continue;
+        }
+
+        if seen_allowed {
+            needs_activation = true;
+            break;
+        }
+    }
+
+    if !needs_activation {
+        return Ok(None);
+    }
+
+    let activatable: Vec<_> = visible_windows
+        .into_iter()
+        .filter(|window| is_window_allowed(window, allowed_bundle_ids, host_bundle_id))
+        .collect();
+
+    let mut activated = None;
+    for window in activatable {
+        kwin.activate_window(&window.id)?;
+        activated = bundle_id_for_window(window);
+    }
+
+    Ok(activated)
 }
 
 fn to_app_refs(windows: &[&WindowInfo]) -> Vec<AppRef> {
@@ -730,10 +811,39 @@ fn key_name_to_key_code(name: &str) -> Result<i32> {
 }
 
 fn active_bundle_id(windows: &[WindowInfo]) -> Option<String> {
+    frontmost_window_ignoring_bridge(windows).and_then(bundle_id_for_window)
+}
+
+fn frontmost_window_ignoring_bridge(windows: &[WindowInfo]) -> Option<&WindowInfo> {
     windows
         .iter()
-        .find(|window| window.is_active)
-        .and_then(bundle_id_for_window)
+        .filter(|window| !is_bridge_window(window))
+        .filter(|window| is_window_visible_for_hit_test(window))
+        .max_by_key(|window| {
+            (
+                if window.is_active { 1_u8 } else { 0_u8 },
+                window.stacking_order,
+            )
+        })
+}
+
+fn screen_for_host_window<'a>(
+    screens: &'a [ScreenInfo],
+    windows: &[WindowInfo],
+    host_bundle_id: &str,
+) -> Option<&'a ScreenInfo> {
+    windows
+        .iter()
+        .filter(|window| is_host_window(window, host_bundle_id))
+        .filter(|window| !is_shell_window(window))
+        .filter(|window| is_window_visible_for_hit_test(window))
+        .max_by_key(|window| {
+            (
+                if window.is_active { 1_u8 } else { 0_u8 },
+                window.stacking_order,
+            )
+        })
+        .and_then(|window| screen_for_window(screens, window))
 }
 
 fn bundle_id_for_window(window: &WindowInfo) -> Option<String> {
@@ -783,6 +893,12 @@ fn is_bridge_window(window: &WindowInfo) -> bool {
 
 fn is_shell_window(window: &WindowInfo) -> bool {
     window.is_dock.unwrap_or(false) || window.is_desktop.unwrap_or(false)
+}
+
+fn is_host_window(window: &WindowInfo, host_bundle_id: &str) -> bool {
+    bundle_id_for_window(window)
+        .map(|bundle_id| bundle_id == host_bundle_id)
+        .unwrap_or(false)
 }
 
 fn is_window_allowed(
@@ -835,6 +951,34 @@ fn is_window_visible_for_hit_test(window: &WindowInfo) -> bool {
     window.is_visible.unwrap_or(true)
 }
 
+fn screen_for_window<'a>(screens: &'a [ScreenInfo], window: &WindowInfo) -> Option<&'a ScreenInfo> {
+    if let Some(output) = &window.output
+        && let Some(screen) = screens
+            .iter()
+            .find(|screen| screen.id == *output || screen.name == *output)
+    {
+        return Some(screen);
+    }
+
+    screens
+        .iter()
+        .filter_map(|screen| {
+            let overlap = rect_intersection_area(
+                window.geometry.x,
+                window.geometry.y,
+                window.geometry.width,
+                window.geometry.height,
+                screen.geometry.x,
+                screen.geometry.y,
+                screen.geometry.width,
+                screen.geometry.height,
+            );
+            (overlap > 0).then_some((screen, overlap))
+        })
+        .max_by_key(|(_, overlap)| *overlap)
+        .map(|(screen, _)| screen)
+}
+
 fn window_matches_screen(window: &WindowInfo, screen: Option<&ScreenInfo>) -> bool {
     let Some(screen) = screen else {
         return true;
@@ -865,6 +1009,23 @@ fn rect_contains_point(rect: &crate::model::Rect, x: i32, y: i32) -> bool {
         && x < rect.x.saturating_add(rect.width)
         && y >= rect.y
         && y < rect.y.saturating_add(rect.height)
+}
+
+fn rect_intersection_area(ax: i32, ay: i32, aw: i32, ah: i32, bx: i32, by: i32, bw: i32, bh: i32) -> i64 {
+    if aw <= 0 || ah <= 0 || bw <= 0 || bh <= 0 {
+        return 0;
+    }
+
+    let left = ax.max(bx);
+    let top = ay.max(by);
+    let right = ax.saturating_add(aw).min(bx.saturating_add(bw));
+    let bottom = ay.saturating_add(ah).min(by.saturating_add(bh));
+
+    if right <= left || bottom <= top {
+        return 0;
+    }
+
+    i64::from(right - left) * i64::from(bottom - top)
 }
 
 fn rects_intersect(ax: i32, ay: i32, aw: i32, ah: i32, bx: i32, by: i32, bw: i32, bh: i32) -> bool {
