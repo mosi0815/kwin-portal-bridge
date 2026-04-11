@@ -922,15 +922,16 @@ async fn try_start_session(
 }
 
 fn default_config(restore_token: Option<String>, with_persistence: bool) -> PortalConfig {
-    let mut config = PortalConfig::default();
-    config.cursor_mode = CursorMode::Embedded;
-    config.restore_token = restore_token;
-    config.persist_mode = if with_persistence {
-        PersistMode::ExplicitlyRevoked
-    } else {
-        PersistMode::DoNot
-    };
-    config
+    PortalConfig {
+        cursor_mode: CursorMode::Embedded,
+        restore_token,
+        persist_mode: if with_persistence {
+            PersistMode::ExplicitlyRevoked
+        } else {
+            PersistMode::DoNot
+        },
+        .. Default::default()
+    }
 }
 
 fn generate_session_id() -> Result<String> {
