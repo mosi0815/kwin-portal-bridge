@@ -3,9 +3,7 @@ use std::collections::HashSet;
 use anyhow::{Context, Result};
 use rmcp::{
     ErrorData as McpError, ServerHandler, ServiceExt,
-    handler::server::{
-        wrapper::{Json, Parameters},
-    },
+    handler::server::wrapper::{Json, Parameters},
     model::{CallToolResult, Content, ServerCapabilities, ServerInfo},
     schemars::JsonSchema,
     tool, tool_handler, tool_router,
@@ -38,9 +36,13 @@ pub struct DesktopLayout {
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct FindWindowsRequest {
-    #[schemars(description = "Match exact normalized bundle id, desktop file id, WM class, or resource name")]
+    #[schemars(
+        description = "Match exact normalized bundle id, desktop file id, WM class, or resource name"
+    )]
     pub bundle_id: Option<String>,
-    #[schemars(description = "Match windows whose title contains this substring, case-insensitive")]
+    #[schemars(
+        description = "Match windows whose title contains this substring, case-insensitive"
+    )]
     pub title_contains: Option<String>,
     #[schemars(description = "Match only windows on this screen id/output")]
     pub screen_id: Option<String>,
@@ -53,7 +55,9 @@ pub struct FindWindowsRequest {
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct LaunchApplicationRequest {
-    #[schemars(description = "Application target: bundle id, desktop id, display name, or desktop entry path")]
+    #[schemars(
+        description = "Application target: bundle id, desktop id, display name, or desktop entry path"
+    )]
     pub target: String,
 }
 
@@ -275,10 +279,7 @@ impl McpServer {
         };
         let structured_content =
             serde_json::to_value(metadata).map_err(|error| internal_error(error.into()))?;
-        let mut result = CallToolResult::success(vec![Content::image(
-            png_base64,
-            "image/png",
-        )]);
+        let mut result = CallToolResult::success(vec![Content::image(png_base64, "image/png")]);
         result.structured_content = Some(structured_content);
 
         Ok(result)
@@ -359,7 +360,10 @@ impl McpServer {
         let kwin = KWinBackend::new();
         let windows = kwin.list_windows().map_err(internal_error)?;
 
-        let bundle_id = request.bundle_id.as_ref().map(|value| value.trim().to_ascii_lowercase());
+        let bundle_id = request
+            .bundle_id
+            .as_ref()
+            .map(|value| value.trim().to_ascii_lowercase());
         let title_contains = request
             .title_contains
             .as_ref()
@@ -415,7 +419,9 @@ impl McpServer {
         Parameters(request): Parameters<LaunchApplicationRequest>,
     ) -> Result<Json<OpenAppResult>, McpError> {
         let desktop_apps = DesktopAppService::new();
-        let result = desktop_apps.open_app(&request.target).map_err(internal_error)?;
+        let result = desktop_apps
+            .open_app(&request.target)
+            .map_err(internal_error)?;
         Ok(Json(result))
     }
 
@@ -428,7 +434,8 @@ impl McpServer {
         Parameters(request): Parameters<ActivateWindowRequest>,
     ) -> Result<Json<ActivateWindowResult>, McpError> {
         let kwin = KWinBackend::new();
-        kwin.activate_window(&request.window_id).map_err(internal_error)?;
+        kwin.activate_window(&request.window_id)
+            .map_err(internal_error)?;
 
         Ok(Json(ActivateWindowResult {
             window_id: request.window_id,
@@ -456,10 +463,7 @@ impl McpServer {
         Ok(Json(result))
     }
 
-    #[tool(
-        name = "click",
-        description = "Click at a global logical point."
-    )]
+    #[tool(name = "click", description = "Click at a global logical point.")]
     async fn click(
         &self,
         Parameters(request): Parameters<ClickRequest>,
@@ -473,16 +477,15 @@ impl McpServer {
         let count = request.count.unwrap_or(1);
         let modifiers = request.modifiers.unwrap_or_default();
         let result = executor
-            .click_raw(request.x, request.y, button, count, &modifiers, &portal, &kwin)
+            .click_raw(
+                request.x, request.y, button, count, &modifiers, &portal, &kwin,
+            )
             .await
             .map_err(internal_error)?;
         Ok(Json(result))
     }
 
-    #[tool(
-        name = "scroll",
-        description = "Scroll at a global logical point."
-    )]
+    #[tool(name = "scroll", description = "Scroll at a global logical point.")]
     async fn scroll(
         &self,
         Parameters(request): Parameters<ScrollRequest>,
@@ -571,10 +574,9 @@ impl McpServer {
 #[tool_handler]
 impl ServerHandler for McpServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
-            .with_instructions(
-                "KWin desktop control primitives for local trusted use on KDE Plasma Wayland.",
-            )
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build()).with_instructions(
+            "KWin desktop control primitives for local trusted use on KDE Plasma Wayland.",
+        )
     }
 }
 
@@ -590,24 +592,7 @@ fn internal_error(error: anyhow::Error) -> McpError {
 }
 
 fn window_matches_bundle_id(window: &WindowInfo, expected: &str) -> bool {
-    [
-        Some(window.id.as_str()),
-        window.desktop_file_name.as_deref(),
-        window.resource_class.as_deref(),
-        window.resource_name.as_deref(),
-    ]
-    .into_iter()
-    .flatten()
-    .map(normalize_bundle_id)
-    .any(|candidate| candidate == expected)
-}
-
-fn normalize_bundle_id(value: &str) -> String {
-    value
-        .trim()
-        .strip_suffix(".desktop")
-        .unwrap_or(value.trim())
-        .to_ascii_lowercase()
+    window.matches_bundle_id(expected)
 }
 
 fn app_ref_for_window(window: &WindowInfo) -> AppRef {
@@ -618,18 +603,7 @@ fn app_ref_for_window(window: &WindowInfo) -> AppRef {
 }
 
 fn window_bundle_id(window: &WindowInfo) -> Option<String> {
-    for candidate in [
-        window.desktop_file_name.as_deref(),
-        window.resource_class.as_deref(),
-        window.resource_name.as_deref(),
-    ] {
-        let normalized = normalize_optional_bundle_id(candidate);
-        if normalized.is_some() {
-            return normalized;
-        }
-    }
-
-    normalize_optional_bundle_id(Some(&window.id))
+    window.bundle_id()
 }
 
 fn normalize_optional_bundle_id(value: Option<&str>) -> Option<String> {
@@ -638,20 +612,11 @@ fn normalize_optional_bundle_id(value: Option<&str>) -> Option<String> {
         return None;
     }
 
-    Some(
-        value
-            .strip_suffix(".desktop")
-            .unwrap_or(value)
-            .to_owned(),
-    )
+    Some(value.strip_suffix(".desktop").unwrap_or(value).to_owned())
 }
 
 fn window_display_name(window: &WindowInfo) -> String {
-    if !window.title.trim().is_empty() {
-        return window.title.clone();
-    }
-
-    window_bundle_id(window).unwrap_or_else(|| window.id.clone())
+    window.display_name()
 }
 
 fn is_bridge_window(window: &WindowInfo) -> bool {
@@ -697,7 +662,6 @@ fn window_matches_screen(window: &WindowInfo, screen: &ScreenInfo) -> bool {
     )
 }
 
-
 async fn ensure_portal_session() -> Result<()> {
     let portal = PortalBackend::new();
 
@@ -727,7 +691,9 @@ fn is_no_active_session_error(error: &anyhow::Error) -> bool {
 }
 
 fn is_session_already_active_error(error: &anyhow::Error) -> bool {
-    error
-        .chain()
-        .any(|cause| cause.to_string().contains("portal session is already active"))
+    error.chain().any(|cause| {
+        cause
+            .to_string()
+            .contains("portal session is already active")
+    })
 }

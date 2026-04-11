@@ -43,11 +43,129 @@ pub struct WindowInfo {
     pub is_minimized: Option<bool>,
     pub is_normal_window: Option<bool>,
     pub is_dialog: Option<bool>,
+    pub transient: Option<bool>,
+    pub transient_for: Option<Box<WindowAppRef>>,
     pub output: Option<String>,
     pub stacking_order: usize,
     pub is_active: bool,
     pub exclude_from_capture: bool,
     pub keep_above: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct WindowAppRef {
+    pub id: String,
+    pub desktop_file_name: Option<String>,
+    pub resource_class: Option<String>,
+    pub resource_name: Option<String>,
+    pub transient: Option<bool>,
+    pub transient_for: Option<Box<WindowAppRef>>,
+}
+
+impl WindowInfo {
+    pub fn bundle_id(&self) -> Option<String> {
+        bundle_id_from_parts(
+            Some(self.id.as_str()),
+            self.desktop_file_name.as_deref(),
+            self.resource_class.as_deref(),
+            self.resource_name.as_deref(),
+            self.transient.unwrap_or(false),
+            self.transient_for.as_deref(),
+        )
+    }
+
+    pub fn display_name(&self) -> String {
+        if !self.title.trim().is_empty() {
+            return self.title.clone();
+        }
+
+        self.bundle_id().unwrap_or_else(|| self.id.clone())
+    }
+
+    pub fn matches_bundle_id(&self, expected: &str) -> bool {
+        let expected = normalize_bundle_id_value(expected);
+        if let Some(bundle_id) = self.bundle_id()
+            && normalize_bundle_id_value(&bundle_id) == expected
+        {
+            return true;
+        }
+
+        [
+            Some(self.id.as_str()),
+            self.desktop_file_name.as_deref(),
+            self.resource_class.as_deref(),
+            self.resource_name.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .any(|candidate| normalize_bundle_id_value(candidate) == expected)
+    }
+
+    pub fn is_transient_for_window(&self, window_id: &str) -> bool {
+        self.transient_for
+            .as_deref()
+            .is_some_and(|window| window.references_window(window_id))
+    }
+}
+
+impl WindowAppRef {
+    fn bundle_id(&self) -> Option<String> {
+        bundle_id_from_parts(
+            Some(self.id.as_str()),
+            self.desktop_file_name.as_deref(),
+            self.resource_class.as_deref(),
+            self.resource_name.as_deref(),
+            self.transient.unwrap_or(false),
+            self.transient_for.as_deref(),
+        )
+    }
+
+    fn references_window(&self, window_id: &str) -> bool {
+        self.id == window_id
+            || self
+                .transient_for
+                .as_deref()
+                .is_some_and(|window| window.references_window(window_id))
+    }
+}
+
+fn bundle_id_from_parts(
+    id: Option<&str>,
+    desktop_file_name: Option<&str>,
+    resource_class: Option<&str>,
+    resource_name: Option<&str>,
+    transient: bool,
+    transient_for: Option<&WindowAppRef>,
+) -> Option<String> {
+    if transient && let Some(bundle_id) = transient_for.and_then(WindowAppRef::bundle_id) {
+        return Some(bundle_id);
+    }
+
+    for candidate in [desktop_file_name, resource_class, resource_name] {
+        let normalized = normalize_optional_bundle_id(candidate);
+        if normalized.is_some() {
+            return normalized;
+        }
+    }
+
+    normalize_optional_bundle_id(id)
+}
+
+fn normalize_optional_bundle_id(value: Option<&str>) -> Option<String> {
+    let value = value?.trim();
+    if value.is_empty() {
+        return None;
+    }
+
+    Some(value.strip_suffix(".desktop").unwrap_or(value).to_owned())
+}
+
+fn normalize_bundle_id_value(value: &str) -> String {
+    value
+        .trim()
+        .strip_suffix(".desktop")
+        .unwrap_or(value.trim())
+        .to_ascii_lowercase()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -289,4 +407,122 @@ pub struct CapturedFrame {
     pub target_stream: StreamSelection,
     pub frame: lamco_pipewire::VideoFrame,
     pub frame_byte_len: usize,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Rect, WindowAppRef, WindowInfo};
+
+    fn test_window(
+        id: &str,
+        title: &str,
+        desktop_file_name: Option<&str>,
+        resource_class: Option<&str>,
+        transient: Option<bool>,
+        transient_for: Option<WindowAppRef>,
+    ) -> WindowInfo {
+        WindowInfo {
+            id: id.to_owned(),
+            title: title.to_owned(),
+            geometry: Rect {
+                x: 0,
+                y: 0,
+                width: 100,
+                height: 100,
+            },
+            pid: None,
+            desktop_file_name: desktop_file_name.map(str::to_owned),
+            resource_class: resource_class.map(str::to_owned),
+            resource_name: Some("soffice.bin".to_owned()),
+            window_role: None,
+            window_type: None,
+            is_dock: Some(false),
+            is_desktop: Some(false),
+            is_visible: Some(true),
+            is_minimized: Some(false),
+            is_normal_window: Some(true),
+            is_dialog: Some(false),
+            transient,
+            transient_for: transient_for.map(Box::new),
+            output: None,
+            stacking_order: 0,
+            is_active: false,
+            exclude_from_capture: false,
+            keep_above: Some(false),
+        }
+    }
+
+    #[test]
+    fn transient_windows_resolve_bundle_id_from_parent() {
+        let transient_for = WindowAppRef {
+            id: "{calc}".to_owned(),
+            desktop_file_name: Some("libreoffice-calc".to_owned()),
+            resource_class: Some("libreoffice-calc".to_owned()),
+            resource_name: Some("soffice.bin".to_owned()),
+            transient: Some(false),
+            transient_for: None,
+        };
+
+        let dialog = test_window(
+            "{dialog}",
+            "Eigenschaften von \"Unbenannt 1\"",
+            Some("libreoffice-startcenter"),
+            Some("libreoffice-startcenter"),
+            Some(true),
+            Some(transient_for),
+        );
+
+        assert_eq!(dialog.bundle_id().as_deref(), Some("libreoffice-calc"));
+        assert!(dialog.matches_bundle_id("libreoffice-calc"));
+    }
+
+    #[test]
+    fn transient_windows_fall_back_to_their_own_identifiers_when_parent_is_missing() {
+        let dialog = test_window(
+            "{dialog}",
+            "",
+            Some("libreoffice-startcenter"),
+            Some("libreoffice-startcenter"),
+            Some(true),
+            None,
+        );
+
+        assert_eq!(
+            dialog.bundle_id().as_deref(),
+            Some("libreoffice-startcenter")
+        );
+        assert_eq!(dialog.display_name(), "libreoffice-startcenter");
+    }
+
+    #[test]
+    fn transient_windows_report_their_parent_chain() {
+        let root = WindowAppRef {
+            id: "{root}".to_owned(),
+            desktop_file_name: Some("libreoffice-calc".to_owned()),
+            resource_class: Some("libreoffice-calc".to_owned()),
+            resource_name: Some("soffice.bin".to_owned()),
+            transient: Some(false),
+            transient_for: None,
+        };
+        let parent = WindowAppRef {
+            id: "{parent}".to_owned(),
+            desktop_file_name: Some("libreoffice-startcenter".to_owned()),
+            resource_class: Some("libreoffice-startcenter".to_owned()),
+            resource_name: Some("soffice.bin".to_owned()),
+            transient: Some(true),
+            transient_for: Some(Box::new(root)),
+        };
+        let dialog = test_window(
+            "{dialog}",
+            "Nested transient",
+            Some("libreoffice-startcenter"),
+            Some("libreoffice-startcenter"),
+            Some(true),
+            Some(parent),
+        );
+
+        assert!(dialog.is_transient_for_window("{parent}"));
+        assert!(dialog.is_transient_for_window("{root}"));
+        assert!(!dialog.is_transient_for_window("{other}"));
+    }
 }

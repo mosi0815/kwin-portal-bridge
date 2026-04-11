@@ -29,7 +29,6 @@ pub enum XCapError {
     #[cfg(target_os = "linux")]
     #[error(transparent)]
     StdTimeSystemTimeError(#[from] std::time::SystemTimeError),
-
 }
 
 impl XCapError {

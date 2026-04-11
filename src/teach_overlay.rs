@@ -10,9 +10,11 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
-use iced::time;
 use iced::font;
-use iced::widget::{Space, button, canvas, column, container, rich_text, row, scrollable, span, text as plain_text};
+use iced::time;
+use iced::widget::{
+    Space, button, canvas, column, container, rich_text, row, scrollable, span, text as plain_text,
+};
 use iced::{
     Alignment, Border, Color, Element, Font, Length, Point, Radians, Rectangle, Shadow, Size,
     Subscription, Task, Theme, Vector, border, window,
@@ -105,7 +107,8 @@ impl TeachOverlayProcess {
             .append(true)
             .open(log_path()?)
             .context("failed to open teach overlay log file")?;
-        let current_exe = std::env::current_exe().context("failed to resolve current executable")?;
+        let current_exe =
+            std::env::current_exe().context("failed to resolve current executable")?;
         let mut command = Command::new(current_exe);
         command
             .arg("serve-teach-overlay")
@@ -157,8 +160,12 @@ pub fn serve(socket: PathBuf) -> Result<()> {
         std::fs::remove_file(&socket).ok();
     }
     if let Some(parent) = socket.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create teach socket directory `{}`", parent.display()))?;
+        std::fs::create_dir_all(parent).with_context(|| {
+            format!(
+                "failed to create teach socket directory `{}`",
+                parent.display()
+            )
+        })?;
     }
 
     let listener = UnixListener::bind(&socket)
@@ -340,7 +347,9 @@ fn handle_request(
             match receiver {
                 Ok(receiver) => match receiver.recv() {
                     Ok(choice) => respond_ok(choice),
-                    Err(error) => respond_err(anyhow::Error::new(error).context("teach step waiter closed")),
+                    Err(error) => {
+                        respond_err(anyhow::Error::new(error).context("teach step waiter closed"))
+                    }
                 },
                 Err(error) => respond_err(error),
             }
@@ -366,7 +375,9 @@ fn handle_request(
             match receiver {
                 Ok(receiver) => match receiver.recv() {
                     Ok(event) => respond_ok(event),
-                    Err(error) => respond_err(anyhow::Error::new(error).context("teach event waiter closed")),
+                    Err(error) => {
+                        respond_err(anyhow::Error::new(error).context("teach event waiter closed"))
+                    }
                 },
                 Err(error) => respond_err(error),
             }
@@ -384,7 +395,9 @@ fn respond_ok<T: Serialize>(value: T) -> TeachOverlayResponse {
         Err(error) => TeachOverlayResponse {
             ok: false,
             result: None,
-            error: Some(format!("failed to serialize teach overlay response: {error}")),
+            error: Some(format!(
+                "failed to serialize teach overlay response: {error}"
+            )),
         },
     }
 }
@@ -460,7 +473,10 @@ impl TeachOverlayService {
 
         let (sender, receiver) = mpsc::channel();
         {
-            let mut state = self.shared.lock().expect("teach overlay state mutex poisoned");
+            let mut state = self
+                .shared
+                .lock()
+                .expect("teach overlay state mutex poisoned");
             resolve_pending_locked(&mut state, "exit");
             state.mode = TeachVisualMode::Step;
             state.last_payload = Some(payload);
@@ -473,7 +489,10 @@ impl TeachOverlayService {
 
     fn set_working(&mut self) -> Result<()> {
         {
-            let mut state = self.shared.lock().expect("teach overlay state mutex poisoned");
+            let mut state = self
+                .shared
+                .lock()
+                .expect("teach overlay state mutex poisoned");
             if state.last_payload.is_none() {
                 return Ok(());
             }
@@ -485,7 +504,10 @@ impl TeachOverlayService {
     }
 
     fn hide(&mut self) -> Result<()> {
-        let mut state = self.shared.lock().expect("teach overlay state mutex poisoned");
+        let mut state = self
+            .shared
+            .lock()
+            .expect("teach overlay state mutex poisoned");
         resolve_pending_locked(&mut state, "exit");
         notify_waiters_locked(&mut state, "hidden");
         state.mode = TeachVisualMode::Hidden;
@@ -496,7 +518,10 @@ impl TeachOverlayService {
 
     fn set_display(&mut self, display: String) -> Result<()> {
         let (changed, should_restart, should_stop) = {
-            let mut state = self.shared.lock().expect("teach overlay state mutex poisoned");
+            let mut state = self
+                .shared
+                .lock()
+                .expect("teach overlay state mutex poisoned");
             let changed = state.display.as_deref() != Some(display.as_str());
             state.display = Some(display);
             rebuild_resolved_payload(&mut state);
@@ -520,7 +545,10 @@ impl TeachOverlayService {
 
     fn wait_event(&self) -> Result<mpsc::Receiver<TeachOverlayAction>> {
         let (sender, receiver) = mpsc::channel();
-        let mut state = self.shared.lock().expect("teach overlay state mutex poisoned");
+        let mut state = self
+            .shared
+            .lock()
+            .expect("teach overlay state mutex poisoned");
         state.event_waiters.push(sender);
         Ok(receiver)
     }
@@ -555,7 +583,10 @@ impl TeachOverlayService {
 impl Drop for TeachOverlayService {
     fn drop(&mut self) {
         {
-            let mut state = self.shared.lock().expect("teach overlay state mutex poisoned");
+            let mut state = self
+                .shared
+                .lock()
+                .expect("teach overlay state mutex poisoned");
             resolve_pending_locked(&mut state, "exit");
             notify_waiters_locked(&mut state, "hidden");
             state.mode = TeachVisualMode::Hidden;
@@ -781,7 +812,8 @@ fn update(app: &mut TeachOverlayApp, message: Message) -> Task<Message> {
                     .last_tick
                     .map(|last| now.duration_since(last).as_secs_f32())
                     .unwrap_or(0.0);
-                app.spinner_angle = (app.spinner_angle + delta / SPINNER_PERIOD_SECONDS * TAU) % TAU;
+                app.spinner_angle =
+                    (app.spinner_angle + delta / SPINNER_PERIOD_SECONDS * TAU) % TAU;
             }
             app.last_tick = Some(now);
 
@@ -813,12 +845,18 @@ fn update(app: &mut TeachOverlayApp, message: Message) -> Task<Message> {
         }
         Message::WindowMonitorSizeLoaded(None) => Task::none(),
         Message::NextPressed => {
-            let mut state = app.shared.lock().expect("teach overlay state mutex poisoned");
+            let mut state = app
+                .shared
+                .lock()
+                .expect("teach overlay state mutex poisoned");
             resolve_pending_locked(&mut state, "next");
             Task::none()
         }
         Message::ExitPressed => {
-            let mut state = app.shared.lock().expect("teach overlay state mutex poisoned");
+            let mut state = app
+                .shared
+                .lock()
+                .expect("teach overlay state mutex poisoned");
             if state.pending_step.is_some() {
                 resolve_pending_locked(&mut state, "exit");
             } else {
@@ -837,16 +875,18 @@ fn update_input_region_task(app: &TeachOverlayApp) -> Task<Message> {
         .as_ref()
         .and_then(|payload| bubble_layout(&app.snapshot, payload, app.viewport));
 
-    Task::done(Message::SetInputRegion(ActionCallback::new(move |region| {
-        if let Some(layout) = &layout {
-            region.add(
-                layout.root_left.round() as i32,
-                layout.root_top.round() as i32,
-                layout.root_width.ceil() as i32,
-                layout.root_height.ceil() as i32,
-            );
-        }
-    })))
+    Task::done(Message::SetInputRegion(ActionCallback::new(
+        move |region| {
+            if let Some(layout) = &layout {
+                region.add(
+                    layout.root_left.round() as i32,
+                    layout.root_top.round() as i32,
+                    layout.root_width.ceil() as i32,
+                    layout.root_height.ceil() as i32,
+                );
+            }
+        },
+    )))
 }
 
 fn view(app: &TeachOverlayApp) -> Element<'_, Message> {
@@ -883,7 +923,12 @@ fn bubble(
 ) -> Element<'static, Message> {
     match layout.arrow_side {
         ArrowSide::Top => column![
-            arrow_canvas(layout.arrow_side, layout.arrow_offset, layout.body_width, ARROW_SIZE),
+            arrow_canvas(
+                layout.arrow_side,
+                layout.arrow_offset,
+                layout.body_width,
+                ARROW_SIZE
+            ),
             bubble_body(snapshot, payload, layout, spinner_angle),
         ]
         .width(layout.root_width)
@@ -891,13 +936,23 @@ fn bubble(
         .into(),
         ArrowSide::Bottom => column![
             bubble_body(snapshot, payload, layout, spinner_angle),
-            arrow_canvas(layout.arrow_side, layout.arrow_offset, layout.body_width, ARROW_SIZE),
+            arrow_canvas(
+                layout.arrow_side,
+                layout.arrow_offset,
+                layout.body_width,
+                ARROW_SIZE
+            ),
         ]
         .width(layout.root_width)
         .height(layout.root_height)
         .into(),
         ArrowSide::Left => row![
-            arrow_canvas(layout.arrow_side, layout.arrow_offset, ARROW_SIZE, layout.body_height),
+            arrow_canvas(
+                layout.arrow_side,
+                layout.arrow_offset,
+                ARROW_SIZE,
+                layout.body_height
+            ),
             bubble_body(snapshot, payload, layout, spinner_angle),
         ]
         .width(layout.root_width)
@@ -905,7 +960,12 @@ fn bubble(
         .into(),
         ArrowSide::Right => row![
             bubble_body(snapshot, payload, layout, spinner_angle),
-            arrow_canvas(layout.arrow_side, layout.arrow_offset, ARROW_SIZE, layout.body_height),
+            arrow_canvas(
+                layout.arrow_side,
+                layout.arrow_offset,
+                ARROW_SIZE,
+                layout.body_height
+            ),
         ]
         .width(layout.root_width)
         .height(layout.root_height)
@@ -968,13 +1028,9 @@ fn bubble_body(
             None
         };
 
-        let mut body = column![
-            scrollable(content)
-                .height(Length::Fill)
-                .width(Length::Fill),
-        ]
-        .spacing(14)
-        .height(Length::Fill);
+        let mut body = column![scrollable(content).height(Length::Fill).width(Length::Fill),]
+            .spacing(14)
+            .height(Length::Fill);
 
         if let Some(next_preview_block) = next_preview_block {
             body = body.push(next_preview_block);
@@ -1038,7 +1094,11 @@ fn overlay_markdown(content: &str, size: u32, color: Color) -> Element<'static, 
     lines.into()
 }
 
-fn overlay_markdown_line(raw_line: &str, base_size: u32, color: Color) -> Element<'static, Message> {
+fn overlay_markdown_line(
+    raw_line: &str,
+    base_size: u32,
+    color: Color,
+) -> Element<'static, Message> {
     let trimmed = raw_line.trim();
     if trimmed.is_empty() {
         return Space::new().width(Length::Fill).height(6).into();
@@ -1102,7 +1162,9 @@ fn parse_inline_markdown(content: &str) -> Vec<RichSpan> {
         let current = chars[i];
         let next = chars.get(i + 1).copied();
 
-        if current == '\\' && let Some(escaped) = next {
+        if current == '\\'
+            && let Some(escaped) = next
+        {
             buffer.push(escaped);
             i += 2;
             continue;
@@ -1251,28 +1313,32 @@ fn primary_button(label: &'static str, message: Message) -> Element<'static, Mes
 }
 
 fn secondary_button(label: &'static str, message: Message) -> Element<'static, Message> {
-    button(plain_text(label).size(13).color(Color::from_rgb(0.239, 0.224, 0.161)))
-        .padding([8.0, 16.0])
-        .style(|_, status| {
-            let background = match status {
-                button::Status::Hovered => Color::from_rgba(0.0, 0.0, 0.0, 0.04),
-                button::Status::Pressed => Color::from_rgba(0.0, 0.0, 0.0, 0.08),
-                _ => Color::TRANSPARENT,
-            };
+    button(
+        plain_text(label)
+            .size(13)
+            .color(Color::from_rgb(0.239, 0.224, 0.161)),
+    )
+    .padding([8.0, 16.0])
+    .style(|_, status| {
+        let background = match status {
+            button::Status::Hovered => Color::from_rgba(0.0, 0.0, 0.0, 0.04),
+            button::Status::Pressed => Color::from_rgba(0.0, 0.0, 0.0, 0.08),
+            _ => Color::TRANSPARENT,
+        };
 
-            button::Style {
-                background: Some(background.into()),
-                text_color: Color::from_rgb(0.239, 0.224, 0.161),
-                border: Border {
-                    radius: 8.0.into(),
-                    width: 1.0,
-                    color: Color::from_rgba(0.0, 0.0, 0.0, 0.12),
-                },
-                ..button::Style::default()
-            }
-        })
-        .on_press(message)
-        .into()
+        button::Style {
+            background: Some(background.into()),
+            text_color: Color::from_rgb(0.239, 0.224, 0.161),
+            border: Border {
+                radius: 8.0.into(),
+                width: 1.0,
+                color: Color::from_rgba(0.0, 0.0, 0.0, 0.12),
+            },
+            ..button::Style::default()
+        }
+    })
+    .on_press(message)
+    .into()
 }
 
 fn spinner(angle: f32) -> Element<'static, Message> {
@@ -1282,7 +1348,12 @@ fn spinner(angle: f32) -> Element<'static, Message> {
         .into()
 }
 
-fn arrow_canvas(side: ArrowSide, offset: f32, width: f32, height: f32) -> Element<'static, Message> {
+fn arrow_canvas(
+    side: ArrowSide,
+    offset: f32,
+    width: f32,
+    height: f32,
+) -> Element<'static, Message> {
     canvas::Canvas::new(ArrowProgram { side, offset })
         .width(width)
         .height(height)
@@ -1312,8 +1383,12 @@ fn bubble_layout(
         return Some(BubbleLayout {
             body_width,
             body_height,
-            root_left: ((viewport_width - root_width) * 0.5).round().max(EDGE_MARGIN),
-            root_top: ((viewport_height - root_height) * 0.5).round().max(EDGE_MARGIN),
+            root_left: ((viewport_width - root_width) * 0.5)
+                .round()
+                .max(EDGE_MARGIN),
+            root_top: ((viewport_height - root_height) * 0.5)
+                .round()
+                .max(EDGE_MARGIN),
             root_width,
             root_height,
             arrow_side: ArrowSide::None,
@@ -1342,9 +1417,10 @@ fn bubble_layout(
 
     match side {
         ArrowSide::Top | ArrowSide::Bottom => {
-            let body_left = (ax - body_width / 2.0)
-                .round()
-                .clamp(EDGE_MARGIN, (viewport_width - body_width - EDGE_MARGIN).max(EDGE_MARGIN));
+            let body_left = (ax - body_width / 2.0).round().clamp(
+                EDGE_MARGIN,
+                (viewport_width - body_width - EDGE_MARGIN).max(EDGE_MARGIN),
+            );
             let body_top = if side == ArrowSide::Top {
                 (ay + ARROW_GAP).round()
             } else {
@@ -1372,9 +1448,10 @@ fn bubble_layout(
             })
         }
         ArrowSide::Left | ArrowSide::Right => {
-            let body_top = (ay - body_height / 2.0)
-                .round()
-                .clamp(EDGE_MARGIN, (viewport_height - body_height - EDGE_MARGIN).max(EDGE_MARGIN));
+            let body_top = (ay - body_height / 2.0).round().clamp(
+                EDGE_MARGIN,
+                (viewport_height - body_height - EDGE_MARGIN).max(EDGE_MARGIN),
+            );
             let body_left = if side == ArrowSide::Left {
                 (ax + ARROW_GAP).round()
             } else {
@@ -1443,15 +1520,13 @@ fn estimated_body_height(snapshot: &TeachOverlaySnapshot, payload: &TeachStepPay
         BUBBLE_VERTICAL_GAP
     };
 
-    (
-        BUBBLE_TOP_SECTION_HEIGHT
-            + explanation_block
-            + preview_block
-            + ACTION_ROW_HEIGHT
-            + section_gaps
-            + 44.0
-            + heading_bonus
-    )
+    (BUBBLE_TOP_SECTION_HEIGHT
+        + explanation_block
+        + preview_block
+        + ACTION_ROW_HEIGHT
+        + section_gaps
+        + 44.0
+        + heading_bonus)
         .clamp(BUBBLE_MIN_HEIGHT, BUBBLE_MAX_HEIGHT)
 }
 
@@ -1497,7 +1572,10 @@ fn normalize_overlay_text(text: &str) -> String {
         }
 
         if let Some((marker, content)) = split_ordered_list_item(trimmed) {
-            normalized.push(format!("{marker} {}", strip_inline_markdown(content.trim())));
+            normalized.push(format!(
+                "{marker} {}",
+                strip_inline_markdown(content.trim())
+            ));
             continue;
         }
 

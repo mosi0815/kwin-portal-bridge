@@ -1,11 +1,11 @@
-use std::env;
+use crate::error::{XCapError, XCapResult};
 use image::RgbaImage;
+use std::env;
+use xcb::x::ScreenBuf;
 use xcb::{
     Connection,
     x::{Drawable, GetImage, ImageFormat, ImageOrder, Window},
 };
-use xcb::x::ScreenBuf;
-use crate::error::{XCapError, XCapResult};
 
 fn get_pixel8_rgba(
     bytes: &[u8],
@@ -158,9 +158,14 @@ mod test {
     fn test_full_screen_capture() {
         let screen_buf = get_current_screen_buf().unwrap();
         println!("{:?}", screen_buf);
-        let result = xorg_capture(screen_buf.root(), 0, 0, screen_buf.width_in_pixels() as u32, screen_buf.height_in_pixels() as u32);
+        let result = xorg_capture(
+            screen_buf.root(),
+            0,
+            0,
+            screen_buf.width_in_pixels() as u32,
+            screen_buf.height_in_pixels() as u32,
+        );
         let image = result.unwrap();
         image.save("test_full_screen_capture.png").unwrap();
-
     }
 }

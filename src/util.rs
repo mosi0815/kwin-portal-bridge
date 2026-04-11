@@ -1,4 +1,13 @@
-pub fn rects_intersect(ax: i32, ay: i32, aw: i32, ah: i32, bx: i32, by: i32, bw: i32, bh: i32) -> bool {
+pub fn rects_intersect(
+    ax: i32,
+    ay: i32,
+    aw: i32,
+    ah: i32,
+    bx: i32,
+    by: i32,
+    bw: i32,
+    bh: i32,
+) -> bool {
     if aw <= 0 || ah <= 0 || bw <= 0 || bh <= 0 {
         return false;
     }

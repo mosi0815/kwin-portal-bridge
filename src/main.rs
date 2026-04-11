@@ -2,6 +2,7 @@ mod capture;
 mod cli;
 mod daemon;
 mod desktop_apps;
+mod error;
 mod exclude_state;
 mod executor;
 mod json;
@@ -12,9 +13,8 @@ mod portal;
 mod session_overlay;
 mod teach_overlay;
 mod token_store;
-mod xorg_capture;
-mod error;
 mod util;
+mod xorg_capture;
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -37,8 +37,7 @@ use crate::session_overlay::run as run_session_overlay;
 use crate::teach_overlay::{
     TeachStepPayload, hide as hide_teach_overlay, preview as preview_teach_overlay,
     serve as serve_teach_overlay, set_display as set_teach_display,
-    set_working as set_teach_working, show_step as show_teach_step,
-    wait_event as wait_teach_event,
+    set_working as set_teach_working, show_step as show_teach_step, wait_event as wait_teach_event,
 };
 
 #[tokio::main]
@@ -61,7 +60,8 @@ async fn main() -> Result<()> {
         Command::SessionStart { foreground } => {
             if foreground {
                 let socket = prepare_session_socket().await?;
-                let (listener, session, overlay, teach_overlay) = open_session_daemon(&socket).await?;
+                let (listener, session, overlay, teach_overlay) =
+                    open_session_daemon(&socket).await?;
                 print_json(&session.info())?;
                 serve_open_session(socket, listener, session, overlay, teach_overlay).await?;
             } else {
@@ -161,7 +161,11 @@ async fn main() -> Result<()> {
         }
         Command::PointerScroll { x, y, dx, dy } => {
             let kwin = kwin();
-            print_json(&executor()?.scroll_raw(x, y, dx, dy, &portal(), &kwin).await?)?;
+            print_json(
+                &executor()?
+                    .scroll_raw(x, y, dx, dy, &portal(), &kwin)
+                    .await?,
+            )?;
         }
         Command::PointerDrag {
             from_x,

@@ -93,11 +93,13 @@ impl KWinBackend {
             .list_windows()?
             .into_iter()
             .find(|window| window.is_active)
-            .map(|window| window.id)
             .ok_or_else(|| anyhow!("KWin did not report an active window after activation"))?;
 
-        if activated != window_id {
-            bail!("KWin activated `{activated}`, but `{window_id}` was requested");
+        if activated.id != window_id && !activated.is_transient_for_window(window_id) {
+            bail!(
+                "KWin activated `{}`, but `{window_id}` was requested",
+                activated.id
+            );
         }
 
         Ok(())
@@ -304,6 +306,27 @@ function bridgeResult(payload) {
 function bridgeError(message) {
     bridgeEmit("error", { message: message });
 }
+
+function bridgeWindowAppRef(window, seenIds, depth) {
+    if (!window || depth <= 0) {
+        return null;
+    }
+
+    const id = String(window.internalId || "");
+    if (id && seenIds.includes(id)) {
+        return null;
+    }
+
+    const nextSeenIds = id ? [...seenIds, id] : seenIds;
+    return {
+        id,
+        desktop_file_name: window.desktopFileName || null,
+        resource_class: window.resourceClass || null,
+        resource_name: window.resourceName || null,
+        transient: typeof window.transient === "boolean" ? window.transient : null,
+        transient_for: bridgeWindowAppRef(window.transientFor, nextSeenIds, depth - 1)
+    };
+}
 "#;
 
 struct Scripts<'a> {
@@ -405,6 +428,8 @@ try {
         is_minimized: typeof window.minimized === "boolean" ? window.minimized : null,
         is_normal_window: typeof window.normalWindow === "boolean" ? window.normalWindow : null,
         is_dialog: typeof window.dialog === "boolean" ? window.dialog : null,
+        transient: typeof window.transient === "boolean" ? window.transient : null,
+        transient_for: bridgeWindowAppRef(window.transientFor, [String(window.internalId)], 8),
         output: window.output ? window.output.name : null,
         stacking_order: typeof window.stackingOrder === "number" ? window.stackingOrder : index,
         is_active: workspace.activeWindow === window,

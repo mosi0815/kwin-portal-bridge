@@ -1,6 +1,9 @@
 use std::io::Cursor;
 use std::path::Path;
 
+use crate::kwin::KWinBackend;
+use crate::model::{SavedImageResult, ScreenInfo, ScreenshotCapture, ScreenshotResult};
+use crate::portal::PortalBackend;
 use anyhow::{Context, Result, bail};
 use base64::Engine;
 use image::codecs::jpeg::JpegEncoder;
@@ -8,13 +11,10 @@ use image::imageops::FilterType;
 use image::{ImageBuffer, RgbImage, Rgba};
 use lamco_pipewire::{FrameBuffer, PixelFormat, VideoFrame};
 use uuid::Uuid;
-use crate::kwin::KWinBackend;
-use crate::model::{SavedImageResult, ScreenInfo, ScreenshotCapture, ScreenshotResult};
-use crate::portal::PortalBackend;
 
 pub struct CaptureBackend;
 
-const SCREENSHOT_JPEG_QUALITY: u8 = 75;
+const SCREENSHOT_JPEG_QUALITY: u8 = 90;
 const MAX_LONG_EDGE: u32 = 1568;
 const MAX_PIXELS: u32 = 1_150_000;
 

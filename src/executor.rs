@@ -1,8 +1,8 @@
 use std::collections::HashSet;
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 
-use crate::capture::{resolve_screen, CaptureBackend};
+use crate::capture::{CaptureBackend, resolve_screen};
 use crate::exclude_state::ExcludeStateStore;
 use crate::kwin::KWinBackend;
 use crate::model::{
@@ -10,7 +10,7 @@ use crate::model::{
     RaiseWindowAtPointResult, ResolvePrepareCaptureResult, ScreenInfo, ScreenshotResult,
     TypeActionResult, WindowInfo,
 };
-use crate::portal::{point_in_screen, PortalBackend};
+use crate::portal::{PortalBackend, point_in_screen};
 use crate::util;
 
 const BRIDGE_BUNDLE_ID: &str = env!("CARGO_PKG_NAME");
@@ -849,18 +849,7 @@ fn screen_for_host_window<'a>(
 }
 
 fn bundle_id_for_window(window: &WindowInfo) -> Option<String> {
-    for candidate in [
-        window.desktop_file_name.as_deref(),
-        window.resource_class.as_deref(),
-        window.resource_name.as_deref(),
-    ] {
-        let normalized = normalize_bundle_id(candidate);
-        if normalized.is_some() {
-            return normalized;
-        }
-    }
-
-    normalize_bundle_id(Some(&window.id))
+    window.bundle_id()
 }
 
 fn normalize_bundle_id(value: Option<&str>) -> Option<String> {
@@ -869,16 +858,11 @@ fn normalize_bundle_id(value: Option<&str>) -> Option<String> {
         return None;
     }
 
-    let normalized = value.strip_suffix(".desktop").unwrap_or(value);
-    Some(normalized.to_owned())
+    Some(value.strip_suffix(".desktop").unwrap_or(value).to_owned())
 }
 
 fn display_name_for_window(window: &WindowInfo) -> String {
-    if !window.title.trim().is_empty() {
-        return window.title.clone();
-    }
-
-    bundle_id_for_window(window).unwrap_or_else(|| window.id.clone())
+    window.display_name()
 }
 
 fn is_bridge_window(window: &WindowInfo) -> bool {
@@ -1037,4 +1021,3 @@ fn rect_intersection_area(
 
     i64::from(right - left) * i64::from(bottom - top)
 }
-

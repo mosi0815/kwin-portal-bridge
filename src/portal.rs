@@ -7,7 +7,11 @@ use anyhow::{Context, Result, bail};
 use ashpd::desktop::PersistMode;
 use ashpd::desktop::screencast::CursorMode;
 use ashpd::{AppID, register_host_app};
-use lamco_pipewire::{FrameBuffer, PipeWireThreadCommand, PipeWireThreadManager, PixelFormat, SourceType as PwSourceType, StreamConfig as PwStreamConfig, StreamInfo as PwStreamInfo, StreamInfo, VideoFrame};
+use lamco_pipewire::{
+    FrameBuffer, PipeWireThreadCommand, PipeWireThreadManager, PixelFormat,
+    SourceType as PwSourceType, StreamConfig as PwStreamConfig, StreamInfo as PwStreamInfo,
+    StreamInfo, VideoFrame,
+};
 use lamco_portal::{PortalConfig, PortalManager, PortalSessionHandle};
 
 use crate::daemon::{SessionRequest, request};
@@ -20,7 +24,7 @@ use crate::token_store::TokenStore;
 
 const PORTAL_APP_ID: &str = "io.claude-desktop";
 const TYPE_KEY_PRESS_DELAY_MS: u64 = 8;
-const TYPE_INTER_CHAR_DELAY_MS: u64 = 30;
+const TYPE_INTER_CHAR_DELAY_MS: u64 = 50;
 
 pub struct PortalBackend;
 pub struct LivePortalSession {
@@ -921,7 +925,7 @@ fn default_config(restore_token: Option<String>, with_persistence: bool) -> Port
         } else {
             PersistMode::DoNot
         },
-        .. Default::default()
+        ..Default::default()
     }
 }
 
