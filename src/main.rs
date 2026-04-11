@@ -14,6 +14,7 @@ mod teach_overlay;
 mod token_store;
 mod xorg_capture;
 mod error;
+mod util;
 
 use anyhow::{Context, Result};
 use clap::Parser;

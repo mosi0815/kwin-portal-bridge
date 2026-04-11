@@ -1,8 +1,8 @@
 use std::collections::HashSet;
 
-use anyhow::{Result, bail};
+use anyhow::{bail, Result};
 
-use crate::capture::{CaptureBackend, resolve_screen};
+use crate::capture::{resolve_screen, CaptureBackend};
 use crate::exclude_state::ExcludeStateStore;
 use crate::kwin::KWinBackend;
 use crate::model::{
@@ -10,7 +10,8 @@ use crate::model::{
     RaiseWindowAtPointResult, ResolvePrepareCaptureResult, ScreenInfo, ScreenshotResult,
     TypeActionResult, WindowInfo,
 };
-use crate::portal::PortalBackend;
+use crate::portal::{point_in_screen, PortalBackend};
+use crate::util;
 
 const BRIDGE_BUNDLE_ID: &str = env!("CARGO_PKG_NAME");
 
@@ -35,7 +36,8 @@ impl ExecutorBackend {
         let screens = kwin.list_screens()?;
         let screen = resolve_optional_screen(&screens, display)?;
         let windows = kwin.list_windows()?;
-        let candidates = select_hide_candidates(&windows, screen, allowed_bundle_ids, host_bundle_id);
+        let candidates =
+            select_hide_candidates(&windows, screen, allowed_bundle_ids, host_bundle_id);
         Ok(to_app_refs(&candidates))
     }
 
@@ -423,8 +425,13 @@ impl ExecutorBackend {
             self.state.clear()?;
         }
 
-        let activated =
-            activate_visible_windows_in_z_order(&windows, screen, allowed_bundle_ids, host_bundle_id, kwin)?;
+        let activated = activate_visible_windows_in_z_order(
+            &windows,
+            screen,
+            allowed_bundle_ids,
+            host_bundle_id,
+            kwin,
+        )?;
 
         Ok(PrepareActionResult {
             hidden: hidden_bundle_ids(&candidates),
@@ -549,15 +556,10 @@ fn auto_capture_screen<'a>(
         .ok_or_else(|| anyhow::anyhow!("no screen available"))
 }
 
-fn screen_at_point<'a>(screens: &'a [ScreenInfo], x: i32, y: i32) -> Result<&'a ScreenInfo> {
+fn screen_at_point(screens: &[ScreenInfo], x: i32, y: i32) -> Result<&ScreenInfo> {
     screens
         .iter()
-        .find(|screen| {
-            x >= screen.geometry.x
-                && x < screen.geometry.x.saturating_add(screen.geometry.width)
-                && y >= screen.geometry.y
-                && y < screen.geometry.y.saturating_add(screen.geometry.height)
-        })
+        .find(|screen| point_in_screen(screen, x, y))
         .ok_or_else(|| anyhow::anyhow!("point {x},{y} is not inside any known display"))
 }
 
@@ -917,8 +919,7 @@ fn is_window_allowed(
 fn top_window_at_point(windows: &[WindowInfo], x: i32, y: i32) -> Option<&WindowInfo> {
     windows_at_point_in_z_order(windows, x, y)
         .into_iter()
-        .rev()
-        .next()
+        .next_back()
 }
 
 fn top_window_at_point_ignoring_bridge(
@@ -990,7 +991,7 @@ fn window_matches_screen(window: &WindowInfo, screen: Option<&ScreenInfo>) -> bo
         return true;
     }
 
-    rects_intersect(
+    util::rects_intersect(
         window.geometry.x,
         window.geometry.y,
         window.geometry.width,
@@ -1011,7 +1012,16 @@ fn rect_contains_point(rect: &crate::model::Rect, x: i32, y: i32) -> bool {
         && y < rect.y.saturating_add(rect.height)
 }
 
-fn rect_intersection_area(ax: i32, ay: i32, aw: i32, ah: i32, bx: i32, by: i32, bw: i32, bh: i32) -> i64 {
+fn rect_intersection_area(
+    ax: i32,
+    ay: i32,
+    aw: i32,
+    ah: i32,
+    bx: i32,
+    by: i32,
+    bw: i32,
+    bh: i32,
+) -> i64 {
     if aw <= 0 || ah <= 0 || bw <= 0 || bh <= 0 {
         return 0;
     }
@@ -1028,15 +1038,3 @@ fn rect_intersection_area(ax: i32, ay: i32, aw: i32, ah: i32, bx: i32, by: i32, 
     i64::from(right - left) * i64::from(bottom - top)
 }
 
-fn rects_intersect(ax: i32, ay: i32, aw: i32, ah: i32, bx: i32, by: i32, bw: i32, bh: i32) -> bool {
-    if aw <= 0 || ah <= 0 || bw <= 0 || bh <= 0 {
-        return false;
-    }
-
-    let a_right = ax.saturating_add(aw);
-    let a_bottom = ay.saturating_add(ah);
-    let b_right = bx.saturating_add(bw);
-    let b_bottom = by.saturating_add(bh);
-
-    ax < b_right && a_right > bx && ay < b_bottom && a_bottom > by
-}

@@ -25,6 +25,7 @@ use crate::model::{
     WindowInfo,
 };
 use crate::portal::PortalBackend;
+use crate::util::rects_intersect;
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -697,18 +698,6 @@ fn window_matches_screen(window: &WindowInfo, screen: &ScreenInfo) -> bool {
     )
 }
 
-fn rects_intersect(ax: i32, ay: i32, aw: i32, ah: i32, bx: i32, by: i32, bw: i32, bh: i32) -> bool {
-    if aw <= 0 || ah <= 0 || bw <= 0 || bh <= 0 {
-        return false;
-    }
-
-    let ax2 = ax.saturating_add(aw);
-    let ay2 = ay.saturating_add(ah);
-    let bx2 = bx.saturating_add(bw);
-    let by2 = by.saturating_add(bh);
-
-    ax < bx2 && ax2 > bx && ay < by2 && ay2 > by
-}
 
 async fn ensure_portal_session() -> Result<()> {
     let portal = PortalBackend::new();
