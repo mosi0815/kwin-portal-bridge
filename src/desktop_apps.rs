@@ -7,11 +7,11 @@ use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use anyhow::{bail, Context, Result};
-use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use anyhow::{Context, Result, bail};
 use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use freedesktop_desktop_entry::unicase::Ascii;
-use freedesktop_desktop_entry::{get_languages_from_env, DesktopEntry, Iter};
+use freedesktop_desktop_entry::{DesktopEntry, Iter, get_languages_from_env};
 use freedesktop_icons::lookup;
 
 use crate::model::{InstalledDesktopApp, OpenAppResult};
@@ -41,19 +41,19 @@ impl DesktopAppService {
         let entry = resolve_entry(target, &index)?;
 
         let launcher = if entry.entry.dbus_activatable() || entry.entry.exec().is_none() {
-            launch_via_gio(&entry.entry)?;
-            "gio-launch".to_owned()
+            launch_via_kio(&entry.entry)?;
+            "kio-launch".to_owned()
         } else {
             match launch_via_exec(&entry.entry) {
                 Ok(()) => "desktop-entry-exec".to_owned(),
                 Err(exec_error) => {
-                    if command_exists("gio") {
-                        launch_via_gio(&entry.entry).with_context(|| {
+                    if command_exists("kioclient") {
+                        launch_via_kio(&entry.entry).with_context(|| {
                             format!(
-                                "desktop entry exec failed ({exec_error:#}), and gio launch fallback also failed"
+                                "desktop entry exec failed ({exec_error:#}), and kio launch fallback also failed"
                             )
                         })?;
-                        "gio-launch-fallback".to_owned()
+                        "kio-launch-fallback".to_owned()
                     } else {
                         return Err(exec_error);
                     }
@@ -118,11 +118,8 @@ fn resolve_entry<'a>(
     if target.is_empty() {
         bail!("app target is empty");
     }
-
-    if let Some(found) = indexed
-        .iter()
-        .find(|entry| entry.entry.path == PathBuf::from(target))
-    {
+    let target_path = PathBuf::from(target);
+    if let Some(found) = indexed.iter().find(|entry| entry.entry.path == target_path) {
         return Ok(found);
     }
 
@@ -350,13 +347,13 @@ fn detect_mime_type(path: &Path) -> &'static str {
     }
 }
 
-fn launch_via_gio(entry: &DesktopEntry) -> Result<()> {
-    if !command_exists("gio") {
-        bail!("`gio` is not available for desktop-entry launching");
+fn launch_via_kio(entry: &DesktopEntry) -> Result<()> {
+    if !command_exists("kioclient") {
+        bail!("`kioclient` is not available for desktop-entry launching");
     }
 
-    let mut command = Command::new("gio");
-    command.arg("launch").arg(&entry.path);
+    let mut command = Command::new("kioclient");
+    command.arg("exec").arg(&entry.path);
     spawn_detached(&mut command)
 }
 
@@ -486,12 +483,12 @@ fn expand_exec_token(
 fn split_exec(exec: &str) -> Result<Vec<String>> {
     let mut parts = Vec::new();
     let mut current = String::new();
-    let mut chars = exec.chars();
+    let chars = exec.chars();
     let mut in_single = false;
     let mut in_double = false;
     let mut escape = false;
 
-    while let Some(ch) = chars.next() {
+    for ch in chars {
         if escape {
             current.push(ch);
             escape = false;
@@ -588,8 +585,15 @@ fn spawn_detached(command: &mut Command) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{expand_exec_token, split_exec};
+    use super::{DesktopAppService, expand_exec_token, split_exec};
 
+    #[test]
+    fn launch_desktop_entry() {
+        let das = DesktopAppService::new();
+        let result = das.open_app("com.mitchellh.ghostty").unwrap();
+        println!("{:?}", result);
+        // launch_via_kio(&DesktopEntry::from_path(PathBuf::from("/usr/share/applications/systemsettings.desktop"), Some(&get_languages_from_env())).unwrap());
+    }
     #[test]
     fn split_exec_handles_quotes_and_escapes() {
         let parsed = split_exec(r#"app --flag "hello world" 'two words'"#).unwrap();
