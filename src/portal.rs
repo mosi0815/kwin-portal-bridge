@@ -643,25 +643,8 @@ impl LivePortalSession {
         repeat: u32,
     ) -> Result<PortalActionResult> {
         for _ in 0..repeat.max(1) {
-            for &keycode in keycodes {
-                self.manager
-                    .remote_desktop()
-                    .notify_keyboard_keycode(self.session.ashpd_session(), keycode, true)
-                    .await
-                    .with_context(|| {
-                        format!("failed to press keycode {keycode} through the portal")
-                    })?;
-            }
-
-            for &keycode in keycodes.iter().rev() {
-                self.manager
-                    .remote_desktop()
-                    .notify_keyboard_keycode(self.session.ashpd_session(), keycode, false)
-                    .await
-                    .with_context(|| {
-                        format!("failed to release keycode {keycode} through the portal")
-                    })?;
-            }
+            self.press_keycodes(keycodes).await?;
+            self.release_keycodes(keycodes).await?;
         }
 
         Ok(PortalActionResult {
@@ -676,25 +659,11 @@ impl LivePortalSession {
         keycodes: &[i32],
         duration_ms: u64,
     ) -> Result<PortalActionResult> {
-        for &keycode in keycodes {
-            self.manager
-                .remote_desktop()
-                .notify_keyboard_keycode(self.session.ashpd_session(), keycode, true)
-                .await
-                .with_context(|| format!("failed to press keycode {keycode} through the portal"))?;
-        }
+        self.press_keycodes(keycodes).await?;
 
         tokio::time::sleep(Duration::from_millis(duration_ms)).await;
 
-        for &keycode in keycodes.iter().rev() {
-            self.manager
-                .remote_desktop()
-                .notify_keyboard_keycode(self.session.ashpd_session(), keycode, false)
-                .await
-                .with_context(|| {
-                    format!("failed to release keycode {keycode} through the portal")
-                })?;
-        }
+        self.release_keycodes(keycodes).await?;
 
         Ok(PortalActionResult {
             action: "hold-key".to_owned(),
