@@ -23,8 +23,8 @@ use crate::model::{
 use crate::token_store::TokenStore;
 
 const PORTAL_APP_ID: &str = "io.claude-desktop";
-const TYPE_KEY_PRESS_DELAY_MS: u64 = 8;
-const TYPE_INTER_CHAR_DELAY_MS: u64 = 50;
+const TYPE_KEY_PRESS_DELAY_MS: u64 = 12;
+const TYPE_INTER_CHAR_DELAY_MS: u64 = 0;
 
 pub struct PortalBackend;
 pub struct LivePortalSession {

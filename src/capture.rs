@@ -14,7 +14,7 @@ use uuid::Uuid;
 
 pub struct CaptureBackend;
 
-const SCREENSHOT_JPEG_QUALITY: u8 = 90;
+const SCREENSHOT_JPEG_QUALITY: u8 = 75;
 const MAX_LONG_EDGE: u32 = 1568;
 const MAX_PIXELS: u32 = 1_150_000;
 

@@ -676,6 +676,10 @@ fn to_app_refs(windows: &[&WindowInfo]) -> Vec<AppRef> {
     let mut apps = Vec::new();
 
     for window in windows {
+        if is_bridge_window(window) {
+            continue;
+        }
+
         let Some(bundle_id) = bundle_id_for_window(window) else {
             continue;
         };
@@ -704,6 +708,10 @@ fn hidden_bundle_ids(windows: &[&WindowInfo]) -> Vec<String> {
     let mut hidden = Vec::new();
 
     for window in windows {
+        if is_bridge_window(window) {
+            continue;
+        }
+
         let Some(bundle_id) = bundle_id_for_window(window) else {
             continue;
         };
@@ -878,7 +886,8 @@ fn is_bridge_window(window: &WindowInfo) -> bool {
 }
 
 fn is_shell_window(window: &WindowInfo) -> bool {
-    window.is_dock.unwrap_or(false) || window.is_desktop.unwrap_or(false)
+    // window.is_dock.unwrap_or(false) || window.is_desktop.unwrap_or(false)
+    window.is_desktop.unwrap_or(false)
 }
 
 fn is_host_window(window: &WindowInfo, host_bundle_id: &str) -> bool {
@@ -1020,4 +1029,66 @@ fn rect_intersection_area(
     }
 
     i64::from(right - left) * i64::from(bottom - top)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        BRIDGE_BUNDLE_ID, hidden_bundle_ids, select_hide_candidates, to_app_refs, windows_to_change,
+    };
+    use crate::model::{Rect, WindowInfo};
+
+    fn test_window(id: &str, bundle_id: &str) -> WindowInfo {
+        WindowInfo {
+            id: id.to_owned(),
+            title: bundle_id.to_owned(),
+            geometry: Rect {
+                x: 0,
+                y: 0,
+                width: 100,
+                height: 100,
+            },
+            pid: None,
+            desktop_file_name: Some(bundle_id.to_owned()),
+            resource_class: Some(bundle_id.to_owned()),
+            resource_name: Some(bundle_id.to_owned()),
+            window_role: None,
+            window_type: None,
+            is_dock: Some(false),
+            is_desktop: Some(false),
+            is_visible: Some(true),
+            is_minimized: Some(false),
+            is_normal_window: Some(true),
+            is_dialog: Some(false),
+            transient: Some(false),
+            transient_for: None,
+            output: None,
+            stacking_order: 0,
+            is_active: false,
+            exclude_from_capture: false,
+            keep_above: Some(false),
+        }
+    }
+
+    #[test]
+    fn hide_responses_skip_bridge_windows() {
+        let bridge = test_window("{bridge}", BRIDGE_BUNDLE_ID);
+        let firefox = test_window("{firefox}", "firefox");
+        let windows = vec![bridge, firefox];
+
+        let candidates = select_hide_candidates(&windows, None, &[], "claude");
+
+        assert_eq!(candidates.len(), 2);
+        assert!(candidates.iter().any(|window| window.id == "{bridge}"));
+        assert!(candidates.iter().any(|window| window.id == "{firefox}"));
+        assert_eq!(
+            windows_to_change(&candidates, true),
+            vec!["{bridge}".to_owned(), "{firefox}".to_owned()]
+        );
+        assert_eq!(hidden_bundle_ids(&candidates), vec!["firefox"]);
+
+        let preview = to_app_refs(&candidates);
+        assert_eq!(preview.len(), 1);
+        assert_eq!(preview[0].bundle_id, "firefox");
+    }
 }
