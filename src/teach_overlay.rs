@@ -881,7 +881,7 @@ fn bubble(
     layout: &BubbleLayout,
     spinner_angle: f32,
 ) -> Element<'static, Message> {
-    let surface = match layout.arrow_side {
+    match layout.arrow_side {
         ArrowSide::Top => column![
             arrow_canvas(layout.arrow_side, layout.arrow_offset, layout.body_width, ARROW_SIZE),
             bubble_body(snapshot, payload, layout, spinner_angle),
@@ -911,9 +911,7 @@ fn bubble(
         .height(layout.root_height)
         .into(),
         ArrowSide::None => bubble_body(snapshot, payload, layout, spinner_angle),
-    };
-
-    surface
+    }
 }
 
 fn bubble_body(
@@ -1150,7 +1148,7 @@ fn parse_inline_markdown(content: &str) -> Vec<RichSpan> {
     flush_inline_markdown_buffer(&mut spans, &mut buffer, style);
     spans
 }
-
+#[allow(clippy::approx_constant)]
 fn flush_inline_markdown_buffer(
     spans: &mut Vec<RichSpan>,
     buffer: &mut String,
@@ -1531,8 +1529,7 @@ fn strip_inline_markdown(text: &str) -> String {
     text.replace("**", "")
         .replace("__", "")
         .replace("~~", "")
-        .replace('`', "")
-        .replace('\\', "")
+        .replace(['`', '\\'], "")
 }
 
 fn estimate_wrapped_lines(text: &str, max_chars: usize) -> usize {

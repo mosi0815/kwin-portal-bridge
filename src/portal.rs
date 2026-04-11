@@ -4,14 +4,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use std::{sync::mpsc as std_mpsc, time::Duration};
 
 use anyhow::{Context, Result, bail};
-use ashpd::{AppID, register_host_app};
 use ashpd::desktop::PersistMode;
 use ashpd::desktop::screencast::CursorMode;
-use lamco_pipewire::{
-    FrameBuffer, PipeWireThreadCommand, PipeWireThreadManager, PixelFormat,
-    SourceType as PwSourceType, StreamConfig as PwStreamConfig, StreamInfo as PwStreamInfo,
-    VideoFrame,
-};
+use ashpd::{AppID, register_host_app};
+use lamco_pipewire::{FrameBuffer, PipeWireThreadCommand, PipeWireThreadManager, PixelFormat, SourceType as PwSourceType, StreamConfig as PwStreamConfig, StreamInfo as PwStreamInfo, StreamInfo, VideoFrame};
 use lamco_portal::{PortalConfig, PortalManager, PortalSessionHandle};
 
 use crate::daemon::{SessionRequest, request};
@@ -325,36 +321,31 @@ async fn poke_pointer_for_stream(
     session: &PortalSessionHandle,
     target_stream: &StreamSelection,
 ) -> Result<()> {
-        let width = f64::from(target_stream.stream.size[0].max(2));
-        let height = f64::from(target_stream.stream.size[1].max(2));
-        let x = (width / 2.0).floor();
-        let y = (height / 2.0).floor();
+    let width = f64::from(target_stream.stream.size[0].max(2));
+    let height = f64::from(target_stream.stream.size[1].max(2));
+    let x = (width / 2.0).floor();
+    let y = (height / 2.0).floor();
 
-        manager
-            .remote_desktop()
-            .notify_pointer_motion_absolute(
-                session.ashpd_session(),
-                target_stream.stream.node_id,
-                x,
-                y,
-            )
-            .await
-            .context("failed to move pointer for PipeWire poke")?;
+    manager
+        .remote_desktop()
+        .notify_pointer_motion_absolute(session.ashpd_session(), target_stream.stream.node_id, x, y)
+        .await
+        .context("failed to move pointer for PipeWire poke")?;
 
-        manager
-            .remote_desktop()
-            .notify_pointer_motion(session.ashpd_session(), 1.0, 0.0)
-            .await
-            .context("failed to send relative pointer poke")?;
+    manager
+        .remote_desktop()
+        .notify_pointer_motion(session.ashpd_session(), 1.0, 0.0)
+        .await
+        .context("failed to send relative pointer poke")?;
 
-        manager
-            .remote_desktop()
-            .notify_pointer_motion(session.ashpd_session(), -1.0, 0.0)
-            .await
-            .context("failed to restore pointer after poke")?;
+    manager
+        .remote_desktop()
+        .notify_pointer_motion(session.ashpd_session(), -1.0, 0.0)
+        .await
+        .context("failed to restore pointer after poke")?;
 
-        Ok(())
-    }
+    Ok(())
+}
 
 impl LivePortalSession {
     pub async fn open() -> Result<Self> {
@@ -984,7 +975,7 @@ fn selected_stream(
             .ok_or_else(|| anyhow::anyhow!("portal session returned no streams"))?
     };
 
-    if selected.size.0 <= 0 || selected.size.1 <= 0 {
+    if selected.size.0 == 0 || selected.size.1 == 0 {
         bail!(
             "portal stream {} has invalid logical size",
             selected.node_id
@@ -1020,7 +1011,7 @@ fn to_pipewire_stream(stream: &StreamSelection) -> PwStreamInfo {
     }
 }
 
-fn read_one_pipewire_frame(fd: OwnedFd, stream_info: PwStreamInfo) -> Result<VideoFrame> {
+fn read_one_pipewire_frame(fd: OwnedFd, stream_info: StreamInfo) -> Result<VideoFrame> {
     let manager = PipeWireThreadManager::new(fd.as_raw_fd())?;
     std::mem::forget(fd);
     let stream = StreamSelection {
@@ -1116,10 +1107,10 @@ fn recv_frame_for_stream(
             break;
         }
 
-        if let Some(frame) = manager.recv_frame_timeout(remaining.min(Duration::from_millis(500))) {
-            if frame.frame_id == u64::from(stream_id) {
-                return Ok(frame);
-            }
+        if let Some(frame) = manager.recv_frame_timeout(remaining.min(Duration::from_millis(500)))
+            && frame.frame_id == u64::from(stream_id)
+        {
+            return Ok(frame);
         }
     }
 
@@ -1214,7 +1205,7 @@ fn is_persistence_rejection(error: &anyhow::Error) -> bool {
 
 fn match_stream_to_screen(
     streams: &[PortalStream],
-    screen: &crate::model::ScreenInfo,
+    screen: &ScreenInfo,
 ) -> Result<StreamSelection> {
     let logical_w = screen.geometry.width;
     let logical_h = screen.geometry.height;
@@ -1242,7 +1233,7 @@ fn match_stream_to_screen(
     })
 }
 
-fn point_in_screen(screen: &ScreenInfo, x: i32, y: i32) -> bool {
+pub fn point_in_screen(screen: &ScreenInfo, x: i32, y: i32) -> bool {
     x >= screen.geometry.x
         && x < screen.geometry.x.saturating_add(screen.geometry.width)
         && y >= screen.geometry.y

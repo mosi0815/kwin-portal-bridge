@@ -4,7 +4,6 @@ use anyhow::{Context, Result};
 use rmcp::{
     ErrorData as McpError, ServerHandler, ServiceExt,
     handler::server::{
-        router::tool::ToolRouter,
         wrapper::{Json, Parameters},
     },
     model::{CallToolResult, Content, ServerCapabilities, ServerInfo},
@@ -195,13 +194,13 @@ pub struct RunningAppsResult {
 
 #[derive(Debug, Clone)]
 pub struct McpServer {
-    tool_router: ToolRouter<Self>,
+    // tool_router: ToolRouter<Self>,
 }
 
 impl McpServer {
     pub fn new() -> Self {
         Self {
-            tool_router: Self::tool_router(),
+            // tool_router: Self::tool_router(),
         }
     }
 }

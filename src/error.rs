@@ -4,15 +4,10 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum XCapError {
-    #[error("Not supported")]
-    NotSupported,
     #[error("{0}")]
     Error(String),
     #[error("StdSyncPoisonError {0}")]
     StdSyncPoisonError(String),
-    #[error("Invalid capture region: {0}")]
-    InvalidCaptureRegion(String),
-
     #[cfg(target_os = "linux")]
     #[error(transparent)]
     XcbError(#[from] xcb::Error),

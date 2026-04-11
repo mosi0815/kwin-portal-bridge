@@ -103,7 +103,11 @@ impl KWinBackend {
         Ok(())
     }
 
-    pub fn set_window_geometry(&self, window_id: &str, geometry: &Rect) -> Result<WindowControlResult> {
+    pub fn set_window_geometry(
+        &self,
+        window_id: &str,
+        geometry: &Rect,
+    ) -> Result<WindowControlResult> {
         let geometry_json = serde_json::to_string(geometry)?;
         let script = format!(
             "{}\nconst TARGET_WINDOW = {:?};\nconst TARGET_GEOMETRY = {};\n{}",
@@ -114,7 +118,11 @@ impl KWinBackend {
         parse_payload(payload)
     }
 
-    pub fn set_window_keep_above(&self, window_id: &str, value: bool) -> Result<WindowControlResult> {
+    pub fn set_window_keep_above(
+        &self,
+        window_id: &str,
+        value: bool,
+    ) -> Result<WindowControlResult> {
         let script = format!(
             "{}\nconst TARGET_WINDOW = {:?};\nconst TARGET_VALUE = {};\n{}",
             SCRIPT_HEADER, window_id, value, SCRIPTS.set_window_keep_above
@@ -174,10 +182,9 @@ fn run_script(
         Box::new(move |message, _connection| {
             if let Some(member) = message.member()
                 && let Some(arg) = message.get1::<String>()
+                && let Ok(mut guard) = message_sink.lock()
             {
-                if let Ok(mut guard) = message_sink.lock() {
-                    guard.push((member.to_string(), arg));
-                }
+                guard.push((member.to_string(), arg));
             }
             true
         }),
