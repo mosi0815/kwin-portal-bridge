@@ -1,9 +1,6 @@
 /target
-llm_corner
-/patcher/index_formatted.js
-/patcher/index.js
-/docs/workspace.json
-/docs/iced-test
+/.idea
 /docs
+/patcher
 .claude
-/patcher/executor.ts
+llm_corner
