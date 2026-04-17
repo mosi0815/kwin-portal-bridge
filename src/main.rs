@@ -2,7 +2,6 @@ mod capture;
 mod cli;
 mod daemon;
 mod desktop_apps;
-mod error;
 mod exclude_state;
 mod executor;
 mod json;
@@ -14,7 +13,6 @@ mod session_overlay;
 mod teach_overlay;
 mod token_store;
 mod util;
-mod xorg_capture;
 
 use anyhow::{Context, Result};
 use clap::Parser;

@@ -6,7 +6,6 @@ use std::{sync::mpsc as std_mpsc, time::Duration};
 use anyhow::{Context, Result, bail};
 use ashpd::desktop::PersistMode;
 use ashpd::desktop::screencast::CursorMode;
-use ashpd::{AppID, register_host_app};
 use lamco_pipewire::{
     FrameBuffer, PipeWireThreadCommand, PipeWireThreadManager, PixelFormat,
     SourceType as PwSourceType, StreamConfig as PwStreamConfig, StreamInfo as PwStreamInfo,
@@ -22,7 +21,6 @@ use crate::model::{
 };
 use crate::token_store::TokenStore;
 
-const PORTAL_APP_ID: &str = "io.claude-desktop";
 
 pub struct PortalBackend;
 pub struct LivePortalSession {
