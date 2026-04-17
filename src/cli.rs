@@ -188,6 +188,8 @@ pub enum Command {
     Type {
         #[arg(long)]
         text: String,
+        #[arg(long, default_value_t = 12)]
+        delay_ms: u64,
     },
     /// Hold one or more keys for a fixed duration in milliseconds.
     HoldKey {

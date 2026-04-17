@@ -55,6 +55,7 @@ pub enum SessionRequest {
     },
     TypeText {
         text: String,
+        delay_ms: u64,
     },
     ClickScreenPoint {
         screen: ScreenInfo,
@@ -400,7 +401,9 @@ async fn handle_request(
         SessionRequest::KeyboardKeycode { keycode, pressed } => {
             respond_async(session.keyboard_keycode(keycode, pressed).await)
         }
-        SessionRequest::TypeText { text } => respond_async(session.type_text(&text).await),
+        SessionRequest::TypeText { text, delay_ms } => {
+            respond_async(session.type_text(&text, delay_ms).await)
+        }
         SessionRequest::ClickScreenPoint {
             screen,
             x,

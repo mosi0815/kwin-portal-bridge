@@ -248,8 +248,8 @@ async fn main() -> Result<()> {
         Command::KeySequence { keys, repeat } => {
             print_json(&executor()?.key_sequence(&keys, repeat, &portal()).await?)?;
         }
-        Command::Type { text } => {
-            print_json(&executor()?.type_text(&text, &portal()).await?)?;
+        Command::Type { text, delay_ms } => {
+            print_json(&executor()?.type_text(&text, delay_ms, &portal()).await?)?;
         }
         Command::HoldKey { keys, duration_ms } => {
             print_json(&executor()?.hold_keys(&keys, duration_ms, &portal()).await?)?;

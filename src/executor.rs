@@ -321,8 +321,13 @@ impl ExecutorBackend {
         })
     }
 
-    pub async fn type_text(&self, text: &str, portal: &PortalBackend) -> Result<TypeActionResult> {
-        portal.type_text(text).await
+    pub async fn type_text(
+        &self,
+        text: &str,
+        delay_ms: u64,
+        portal: &PortalBackend,
+    ) -> Result<TypeActionResult> {
+        portal.type_text(text, delay_ms).await
     }
 
     pub async fn drag(
@@ -886,8 +891,8 @@ fn is_bridge_window(window: &WindowInfo) -> bool {
 }
 
 fn is_shell_window(window: &WindowInfo) -> bool {
-    // window.is_dock.unwrap_or(false) || window.is_desktop.unwrap_or(false)
-    window.is_desktop.unwrap_or(false)
+    window.is_dock.unwrap_or(false) || window.is_desktop.unwrap_or(false)
+    // window.is_desktop.unwrap_or(false)
 }
 
 fn is_host_window(window: &WindowInfo, host_bundle_id: &str) -> bool {

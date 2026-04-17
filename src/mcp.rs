@@ -135,6 +135,9 @@ pub struct PressKeysRequest {
 pub struct TypeTextRequest {
     #[schemars(description = "Text to type through the portal session")]
     pub text: String,
+    #[schemars(description = "Delay in ms between characters (default 12)")]
+    #[serde(default)]
+    pub delay_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -534,7 +537,7 @@ impl McpServer {
         let executor = ExecutorBackend::new().map_err(internal_error)?;
         let portal = PortalBackend::new();
         let result = executor
-            .type_text(&request.text, &portal)
+            .type_text(&request.text, request.delay_ms.unwrap_or(12), &portal)
             .await
             .map_err(internal_error)?;
         Ok(Json(result))

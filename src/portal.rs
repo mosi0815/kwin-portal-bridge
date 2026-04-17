@@ -23,8 +23,6 @@ use crate::model::{
 use crate::token_store::TokenStore;
 
 const PORTAL_APP_ID: &str = "io.claude-desktop";
-const TYPE_KEY_PRESS_DELAY_MS: u64 = 12;
-const TYPE_INTER_CHAR_DELAY_MS: u64 = 0;
 
 pub struct PortalBackend;
 pub struct LivePortalSession {
@@ -159,9 +157,10 @@ impl PortalBackend {
         .await
     }
 
-    pub async fn type_text(&self, text: &str) -> Result<TypeActionResult> {
+    pub async fn type_text(&self, text: &str, delay_ms: u64) -> Result<TypeActionResult> {
         request(SessionRequest::TypeText {
             text: text.to_owned(),
+            delay_ms,
         })
         .await
     }
@@ -667,7 +666,7 @@ impl LivePortalSession {
         })
     }
 
-    pub async fn type_text(&mut self, text: &str) -> Result<TypeActionResult> {
+    pub async fn type_text(&mut self, text: &str, delay_ms: u64) -> Result<TypeActionResult> {
         for ch in text.chars() {
             let keysym = char_to_keysym(ch)?;
             self.manager
@@ -680,7 +679,7 @@ impl LivePortalSession {
                         ch
                     )
                 })?;
-            tokio::time::sleep(Duration::from_millis(TYPE_KEY_PRESS_DELAY_MS)).await;
+            // tokio::time::sleep(Duration::from_millis(TYPE_KEY_PRESS_DELAY_MS)).await;
             self.manager
                 .remote_desktop()
                 .notify_keyboard_keysym(self.session.ashpd_session(), keysym, false)
@@ -691,7 +690,7 @@ impl LivePortalSession {
                         ch
                     )
                 })?;
-            tokio::time::sleep(Duration::from_millis(TYPE_INTER_CHAR_DELAY_MS)).await;
+            tokio::time::sleep(Duration::from_millis(delay_ms)).await;
         }
 
         Ok(TypeActionResult {
@@ -893,18 +892,18 @@ async fn try_start_session(
     restore_token: Option<String>,
     with_persistence: bool,
 ) -> Result<(PortalManager, PortalSessionHandle, Option<String>)> {
-    let app_id = AppID::try_from(PORTAL_APP_ID).context("invalid portal app id")?;
-    if let Err(error) = register_host_app(app_id).await {
-        let error_text = error.to_string();
-        if error_text.contains("Connection already associated with an application ID") {
-            eprintln!(
-                "[kwin-portal-bridge] portal connection already has an application ID for {}; continuing",
-                PORTAL_APP_ID
-            );
-        } else {
-            return Err(error).context("failed to register host app for portal session");
-        }
-    }
+    // let app_id = AppID::try_from(PORTAL_APP_ID).context("invalid portal app id")?;
+    // if let Err(error) = register_host_app(app_id).await {
+    //     let error_text = error.to_string();
+    //     if error_text.contains("Connection already associated with an application ID") {
+    //         eprintln!(
+    //             "[kwin-portal-bridge] portal connection already has an application ID for {}; continuing",
+    //             PORTAL_APP_ID
+    //         );
+    //     } else {
+    //         return Err(error).context("failed to register host app for portal session");
+    //     }
+    // }
 
     let manager = PortalManager::new(default_config(restore_token, with_persistence)).await?;
     let session_id = generate_session_id()?;
