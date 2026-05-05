@@ -1,29 +1,35 @@
 [package]
 name = "kwin-portal-bridge"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 
 [dependencies]
-anyhow = "1.0"
-ashpd = "0.13"
-base64 = "0.22"
-clap = { version = "4.5", features = ["derive"] }
-dbus = "0.9"
-freedesktop-desktop-entry = { version = "0.8", default-features = false }
-freedesktop-icons = "0.4"
-iced = { version = "0.14.0", features = ["canvas", "tokio"] }
-iced_layershell = "0.17.1"
-image = "0.25"
-lamco-portal = "0.4"
-lamco-pipewire = "0.4"
-libc = "0.2"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-schemars = "1.2.1"
-tempfile = "3.13"
-tokio = { version = "1.51.1", features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "time"] }
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
-wl-clipboard-rs = "0.9"
-uuid = { version = "1.23.0", features = ["v4"] }
-rmcp = { version = "1.4.0", features = ["schemars", "transport-io"] }
+anyhow = "1.0.102"
+ashpd = "0.13.10"
+base64 = "0.22.1"
+clap = { version = "4.6.1", features = ["derive", "std", "help", "suggestions"], default-features = false }
+dbus = { version = "0.9.11", features = ["vendored"], default-features = false }
+freedesktop-desktop-entry = { version = "0.8.1", default-features = false }
+freedesktop-icons = { version = "0.4.0", default-features = false }
+iced = { version = "0.14.0", features = ["canvas", "tokio", "wayland", "web-colors", "wgpu"], default-features = false }
+iced_layershell = { version = "0.18.0", default-features = false }
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png"] }
+lamco-portal = { version = "0.4.0", default-features = false}
+lamco-pipewire = { version = "0.4.2", default-features = false}
+libc = { version = "0.2.186", default-features = false, features = ["std"]}
+serde = { version = "1.0.228" , default-features = false}
+serde_json = { version = "1.0.149", default-features = false, features = ["std"] }
+schemars = { version = "1.2.1", default-features = false, optional = true }
+tempfile = { version = "3.27.0", default-features = false}
+tokio = { version = "1.52.2", features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "time"] , default-features = false}
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] , default-features = false}
+wl-clipboard-rs = { version = "0.9.3", default-features = false}
+rmcp = { version = "1.6.0", features = ["schemars", "transport-io", "server", "macros"] , default-features = false, optional = true }
 
+[features]
+default = []
+mcp = ["dep:rmcp", "dep:schemars"]
+
+[profile.release]
+lto = "thin"
+opt-level = 3

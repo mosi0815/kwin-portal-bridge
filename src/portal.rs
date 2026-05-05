@@ -238,6 +238,7 @@ impl PortalBackend {
         self.capture_raw_frame_with_options(stream, false).await
     }
 
+    #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
     pub async fn capture_raw_frame_for_screen(&self, screen: &ScreenInfo) -> Result<CapturedFrame> {
         let (manager, session, restore_token) = start_session().await?;
         let info = session_info(&session, restore_token);

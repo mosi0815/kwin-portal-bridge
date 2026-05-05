@@ -10,13 +10,14 @@ use image::codecs::jpeg::JpegEncoder;
 use image::imageops::FilterType;
 use image::{ImageBuffer, RgbImage, Rgba};
 use lamco_pipewire::{FrameBuffer, PixelFormat, VideoFrame};
-use uuid::Uuid;
 
 pub struct CaptureBackend;
 
 const SCREENSHOT_JPEG_QUALITY: u8 = 75;
 const MAX_LONG_EDGE: u32 = 1568;
 const MAX_PIXELS: u32 = 1_150_000;
+// const MAX_LONG_EDGE: u32 = 2576;
+// const MAX_PIXELS: u32 = 3_500_000;
 
 impl CaptureBackend {
     pub fn new() -> Self {
@@ -108,6 +109,7 @@ pub(crate) fn screenshot_result_from_frame(
     })
 }
 
+#[cfg_attr(not(feature = "mcp"), allow(dead_code))]
 pub(crate) fn png_base64_from_frame(frame: &VideoFrame) -> Result<String> {
     let rgba = rgba_from_frame(frame)?;
     let image = ImageBuffer::<Rgba<u8>, Vec<u8>>::from_raw(frame.width, frame.height, rgba)
@@ -271,7 +273,7 @@ fn crop_logical_region(
 }
 
 fn encode_resized_jpeg_base64(rgb: &RgbImage, target: (u32, u32)) -> Result<ScreenshotCapture> {
-    let mut filter_type = FilterType::Lanczos3;
+    let mut filter_type = FilterType::CatmullRom;
     if cfg!(debug_assertions) {
         filter_type = FilterType::Nearest;
     }
@@ -283,8 +285,8 @@ fn encode_resized_jpeg_base64(rgb: &RgbImage, target: (u32, u32)) -> Result<Scre
         .encode_image(&resized)
         .context("failed to JPEG-encode screenshot")?;
     // save jpeg to file
-    let file_path = format!("/tmp/screenshot_{}.jpg", Uuid::new_v4());
-    std::fs::write(&file_path, &jpeg).context("failed to save screenshot to file")?;
+    // let file_path = format!("/tmp/screenshot_{}.jpg", Uuid::new_v4());
+    // std::fs::write(&file_path, &jpeg).context("failed to save screenshot to file")?;
 
     Ok(ScreenshotCapture {
         base64: base64::engine::general_purpose::STANDARD.encode(jpeg),

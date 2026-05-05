@@ -14,6 +14,7 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Start the standalone MCP server on stdio.
+    #[cfg(feature = "mcp")]
     Mcp,
     /// Start a long-lived portal session daemon for this tool-use lock.
     SessionStart {

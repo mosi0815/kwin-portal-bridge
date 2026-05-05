@@ -6,6 +6,7 @@ mod exclude_state;
 mod executor;
 mod json;
 mod kwin;
+#[cfg(feature = "mcp")]
 mod mcp;
 mod model;
 mod portal;
@@ -28,6 +29,7 @@ use crate::desktop_apps::DesktopAppService;
 use crate::executor::ExecutorBackend;
 use crate::json::print_json;
 use crate::kwin::KWinBackend;
+#[cfg(feature = "mcp")]
 use crate::mcp::run_mcp;
 use crate::model::Rect;
 use crate::portal::PortalBackend;
@@ -52,6 +54,7 @@ async fn main() -> Result<()> {
     let portal = PortalBackend::new;
 
     match cli.command {
+        #[cfg(feature = "mcp")]
         Command::Mcp => {
             run_mcp().await?;
         }
