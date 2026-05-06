@@ -4,3 +4,5 @@
 /patcher
 .claude
 llm_corner
+/dist
+/.pipeline-cache
