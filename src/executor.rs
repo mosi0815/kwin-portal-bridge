@@ -15,8 +15,6 @@ use crate::model::{
 use crate::portal::{PortalBackend, point_in_screen};
 use crate::util;
 
-const BRIDGE_BUNDLE_ID: &str = env!("CARGO_PKG_NAME");
-
 pub struct ExecutorBackend {
     state: ExcludeStateStore,
     desktop_apps: DesktopAppService,
@@ -912,9 +910,11 @@ fn display_name_for_window(window: &WindowInfo, idx: &AliasIndex) -> String {
 }
 
 fn is_bridge_window(window: &WindowInfo) -> bool {
-    // Bridge windows are tagged with the cargo package name as their X11
-    // class. Self-check, so no alias index needed — just lowercase + strip
-    // `.desktop` for safety.
+    // Bridge windows (including the teach/session overlays we spawn) are
+    // tagged with our process's executable name as their X11 class. The
+    // binary is usually `kwin-portal-bridge` but may be renamed at install
+    // time, so consult `util::bridge_overlay_names()` for both.
+    let overlay_names = util::bridge_overlay_names();
     [
         window.desktop_file_name.as_deref(),
         window.resource_class.as_deref(),
@@ -929,7 +929,7 @@ fn is_bridge_window(window: &WindowInfo) -> bool {
             .unwrap_or(trimmed)
             .to_ascii_lowercase()
     })
-    .any(|value| value == BRIDGE_BUNDLE_ID)
+    .any(|value| overlay_names.iter().any(|name| name == &value))
 }
 
 fn is_shell_window(window: &WindowInfo) -> bool {
@@ -1082,9 +1082,11 @@ fn rect_intersection_area(
 #[cfg(test)]
 mod tests {
     use super::{
-        BRIDGE_BUNDLE_ID, hidden_bundle_ids, is_window_allowed, select_hide_candidates,
-        to_app_refs, windows_to_change,
+        hidden_bundle_ids, is_window_allowed, select_hide_candidates, to_app_refs,
+        windows_to_change,
     };
+
+    const BRIDGE_BUNDLE_ID: &str = env!("CARGO_PKG_NAME");
     use crate::desktop_apps::AliasIndex;
     use crate::model::{Rect, WindowInfo};
 
